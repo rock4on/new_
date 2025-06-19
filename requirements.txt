@@ -1,0 +1,7 @@
+scrapy
+scrapy-llm
+pydantic
+pypdf
+langdetect
+scrapy-playwright
+playwright
