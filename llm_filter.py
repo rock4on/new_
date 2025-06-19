@@ -26,9 +26,13 @@ class RelevanceAnalysis(BaseModel):
     key_topics: List[str] = Field(description="Main topics found in the document")
 
 
-# Configuration - Set your API key and endpoint here
+# Configuration - Set your preferences here
 DEFAULT_API_KEY = "your-api-key-here"
 DEFAULT_BASE_URL = "https://api.openai.com/v1"  # Change to your custom endpoint
+DEFAULT_MODEL = "gpt-4o-mini"
+DEFAULT_CONFIDENCE_THRESHOLD = 0.7
+DEFAULT_DOWNLOADS_DIR = "downloads"
+RELEVANCE_CRITERIA = "documents related to financial regulations, compliance, and legal requirements"  # Change this to what you're looking for
 
 
 class DocumentProcessor:
@@ -204,26 +208,23 @@ Based on the criteria, analyze this document's relevance.
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Filter downloaded PDFs using LLM")
-    parser.add_argument("criteria", help="Relevance criteria (what you're looking for)")
-    parser.add_argument("--downloads-dir", default="downloads", help="Directory containing PDFs")
-    parser.add_argument("--model", default="gpt-4o-mini", help="LLM model to use")
-    parser.add_argument("--confidence", type=float, default=0.7, help="Confidence threshold (0.0-1.0)")
-    parser.add_argument("--api-key", help="OpenAI API key (or set OPENAI_API_KEY env var)")
-    parser.add_argument("--base-url", help="Custom API base URL")
-    
-    args = parser.parse_args()
+    print("🔍 Starting PDF Document Filter...")
+    print(f"📁 Looking for PDFs in: {DEFAULT_DOWNLOADS_DIR}")
+    print(f"🎯 Search criteria: {RELEVANCE_CRITERIA}")
+    print(f"🤖 Using model: {DEFAULT_MODEL}")
+    print(f"📊 Confidence threshold: {DEFAULT_CONFIDENCE_THRESHOLD}")
+    print("-" * 80)
     
     processor = DocumentProcessor(
-        downloads_dir=args.downloads_dir,
-        api_key=args.api_key,
-        base_url=args.base_url
+        downloads_dir=DEFAULT_DOWNLOADS_DIR,
+        api_key=DEFAULT_API_KEY,
+        base_url=DEFAULT_BASE_URL
     )
     
     processor.process_documents(
-        relevance_criteria=args.criteria,
-        model=args.model,
-        confidence_threshold=args.confidence
+        relevance_criteria=RELEVANCE_CRITERIA,
+        model=DEFAULT_MODEL,
+        confidence_threshold=DEFAULT_CONFIDENCE_THRESHOLD
     )
 
 
