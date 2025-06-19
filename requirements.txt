@@ -1,7 +1,10 @@
 scrapy
-scrapy-llm
 pydantic
 pypdf
 langdetect
 scrapy-playwright
 playwright
+langchain
+langchain-openai
+langchain-core
+PyPDF2
