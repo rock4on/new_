@@ -89,6 +89,9 @@ class DocSpider(scrapy.Spider):
                     }
                     self.pdf_metadata.append(metadata)
                     
+                    # Save individual metadata file immediately
+                    self.save_individual_metadata(metadata)
+                    
                     yield DocItem(
                         file_urls=[url],
                         src_page=response.url,
@@ -99,6 +102,22 @@ class DocSpider(scrapy.Spider):
                     yield response.follow(url, self.parse)
         
         self.logger.info(f"📊 Page {response.url}: Found {pdf_count} PDFs out of {link_count} links")
+    
+    def save_individual_metadata(self, metadata):
+        """Save individual metadata file for each PDF"""
+        downloads_dir = Path(self.settings["FILES_STORE"])
+        downloads_dir.mkdir(exist_ok=True)
+        
+        # Create metadata filename: scrapy_hash.json (matches PDF filename)
+        pdf_filename = metadata["filename"]
+        json_filename = pdf_filename.replace('.pdf', '.json')
+        metadata_file = downloads_dir / json_filename
+        
+        # Save individual metadata
+        with open(metadata_file, 'w', encoding='utf-8') as f:
+            json.dump(metadata, f, indent=2, ensure_ascii=False)
+        
+        self.logger.info(f"💾 Saved metadata: {json_filename}")
     
     def closed(self, reason):
         """Save PDF metadata when spider closes"""
