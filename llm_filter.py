@@ -16,6 +16,8 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.pydantic_v1 import BaseModel, Field
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 
 
 class DocumentAnalysis(BaseModel):
@@ -122,11 +124,9 @@ INSTRUCTIONS:
                 if max_pages is None:
                     # Extract ALL pages
                     pages_to_extract = reader.pages
-                    print(f"    📖 Extracting ALL {len(reader.pages)} pages")
                 else:
                     # Extract only first max_pages
                     pages_to_extract = reader.pages[:max_pages]
-                    print(f"    📖 Extracting first {min(max_pages, len(reader.pages))} pages")
                 
                 # Extract text from selected pages
                 for i, page in enumerate(pages_to_extract):
@@ -223,12 +223,11 @@ INSTRUCTIONS:
                 # Use the filename from metadata as key
                 if "filename" in metadata:
                     metadata_mapping[metadata["filename"]] = metadata
-                    print(f"📋 Loaded metadata for: {metadata['filename']}")
                     
             except Exception as e:
                 print(f"Warning: Could not load metadata from {json_file}: {e}")
         
-        print(f"📊 Loaded metadata for {len(metadata_mapping)} PDFs")
+        print(f"Loaded metadata for {len(metadata_mapping)} PDFs")
         return metadata_mapping
 
     def save_individual_json(self, analysis: Dict[str, Any], pdf_filename: str):
@@ -245,11 +244,50 @@ INSTRUCTIONS:
         with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(analysis, f, indent=2, ensure_ascii=False)
         
-        print(f"  💾 Saved individual JSON: {json_path}")
+        print(f"Saved individual JSON: {json_path}")
+
+    def process_single_pdf(self, pdf_file: Path, pdf_metadata: dict, relevance_criteria: str, 
+                          confidence_threshold: float, model: str) -> tuple:
+        """Process a single PDF file (for parallel processing)"""
+        
+        # Extract text from PDF
+        text = self.extract_pdf_text(pdf_file, max_pages=None)
+        if not text:
+            return None, False
+        
+        # Get metadata
+        file_metadata = pdf_metadata.get(pdf_file.name, {})
+        pdf_url = file_metadata.get("pdf_url", "Unknown")
+        src_page = file_metadata.get("src_page", "Unknown")
+        original_filename = file_metadata.get("original_filename", pdf_file.name)
+        title = file_metadata.get("title", "Unknown")
+        scraped_at = file_metadata.get("scraped_at", "Unknown")
+        file_size = pdf_file.stat().st_size if pdf_file.exists() else 0
+        
+        # LLM analysis
+        analysis = self.analyze_document(text, relevance_criteria, pdf_url, original_filename, model)
+        
+        # Add clean metadata (removed unwanted fields)
+        analysis["file_size"] = file_size
+        analysis["original_filename"] = original_filename
+        analysis["title_from_link"] = title
+        analysis["src_page"] = src_page
+        analysis["scraped_at"] = scraped_at
+        analysis["full_text_available"] = len(text) > 0
+        analysis["text_length"] = len(text)
+        analysis["filename"] = pdf_file.name
+        analysis["file_path"] = str(pdf_file)
+        analysis["processed_at"] = datetime.now().isoformat()
+        
+        # Check if relevant
+        is_relevant = (analysis["relevant"] and 
+                      analysis["confidence"] >= confidence_threshold)
+        
+        return analysis, is_relevant
 
     def process_documents(self, relevance_criteria: str, model: str = "gpt-4o-mini", 
                          confidence_threshold: float = 0.7):
-        """Process all PDFs and output only JSON analysis (no file moving/organizing)"""
+        """Process all PDFs in parallel for speed"""
         
         # PDFs are in downloads/full/ subdirectory
         pdf_dir = self.downloads_dir / "full"
@@ -261,117 +299,75 @@ INSTRUCTIONS:
         # Load metadata mapping
         pdf_metadata = self.load_pdf_metadata()
         
-        all_analyses = []
-        relevant_count = 0
-        
-        print(f"Processing {len(pdf_files)} documents...")
+        print(f"Processing {len(pdf_files)} documents in parallel...")
         print(f"Analysis criteria: {relevance_criteria}")
         print(f"Confidence threshold: {confidence_threshold}")
         print("-" * 80)
         
-        for pdf_file in pdf_files:
-            print(f"Processing: {pdf_file.name}")
-            
-            # Extract ALL text from PDF (not just first 5 pages)
-            text = self.extract_pdf_text(pdf_file, max_pages=None)  # Get all pages
-            if not text:
-                print(f"  ❌ Could not extract text, skipping")
-                continue
-            
-            # Get comprehensive metadata from individual JSON files
-            file_metadata = pdf_metadata.get(pdf_file.name, {})
-            pdf_url = file_metadata.get("pdf_url", "Unknown")
-            src_page = file_metadata.get("src_page", "Unknown")
-            original_filename = file_metadata.get("original_filename", pdf_file.name)
-            title = file_metadata.get("title", "Unknown")
-            scraped_at = file_metadata.get("scraped_at", "Unknown")
-            
-            # Get file stats from actual PDF
-            file_size = pdf_file.stat().st_size if pdf_file.exists() else 0
-            
-            print(f"  📎 PDF URL: {pdf_url}")
-            print(f"  📄 Original: {original_filename}, Size: {file_size} bytes")
-            print(f"  📋 Title: {title}")
-            print(f"  📁 PDF Location: downloads/full/{pdf_file.name}")
-            
-            # Comprehensive document analysis with ALL text
-            analysis = self.analyze_document(text, relevance_criteria, pdf_url, original_filename, model)
-            
-            # Add extra metadata from scrapy and file system
-            analysis["file_size"] = file_size
-            analysis["original_filename"] = original_filename
-            analysis["scrapy_filename"] = pdf_file.name
-            analysis["pdf_file_path"] = f"downloads/full/{pdf_file.name}"
-            analysis["title_from_link"] = title
-            analysis["src_page"] = src_page
-            analysis["scraped_at"] = scraped_at
-            analysis["full_text_available"] = len(text) > 0
-            analysis["text_length"] = len(text)
-            
-            # Count relevant documents
-            is_relevant = (analysis["relevant"] and 
-                          analysis["confidence"] >= confidence_threshold)
-            
-            if is_relevant:
-                relevant_count += 1
-                status = "✅ RELEVANT"
-            else:
-                status = "❌ IRRELEVANT"
-            
-            print(f"  {status}")
-            print(f"  Confidence: {analysis['confidence']:.2f}")
-            print(f"  Regulation: {analysis.get('regulation_name', 'Unknown')}")
-            print(f"  Country: {analysis.get('country', 'Unknown')}")
-            print(f"  Authority: {analysis.get('issuing_body', 'Unknown')}")
-            print(f"  Translated: {analysis.get('translated_flag', False)}")
-            print()
-            
-            # Add processing metadata (no file moving)
-            analysis["filename"] = pdf_file.name
-            analysis["file_path"] = str(pdf_file)
-            analysis["processing_status"] = status
-            analysis["processed_at"] = datetime.now().isoformat()
-            
-            all_analyses.append(analysis)
-            
-            # Save individual JSON file for this PDF
-            self.save_individual_json(analysis, original_filename or pdf_file.name)
+        all_analyses = []
+        relevant_analyses = []
         
-        # Save comprehensive JSON results ONLY
-        results_file = self.downloads_dir / "regulatory_analysis.json"
-        output_data = {
-            "metadata": {
-                "analysis_date": datetime.now().isoformat(),
-                "criteria": relevance_criteria,
-                "model": model,
-                "confidence_threshold": confidence_threshold,
-                "total_documents": len(pdf_files),
-                "relevant_documents": relevant_count,
-                "irrelevant_documents": len(pdf_files) - relevant_count,
-                "processing_mode": "JSON_ONLY"
-            },
-            "regulations": all_analyses
-        }
+        # Process PDFs in parallel using ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            # Submit all tasks
+            future_to_pdf = {
+                executor.submit(self.process_single_pdf, pdf_file, pdf_metadata, 
+                               relevance_criteria, confidence_threshold, model): pdf_file 
+                for pdf_file in pdf_files
+            }
+            
+            # Collect results as they complete
+            for future in as_completed(future_to_pdf):
+                pdf_file = future_to_pdf[future]
+                try:
+                    analysis, is_relevant = future.result()
+                    if analysis is None:
+                        print(f"Skipped: {pdf_file.name} (no text)")
+                        continue
+                        
+                    all_analyses.append(analysis)
+                    
+                    if is_relevant:
+                        relevant_analyses.append(analysis)
+                        print(f"RELEVANT: {analysis.get('regulation_name', 'Unknown')} ({analysis['confidence']:.2f})")
+                        # Save individual JSON for relevant files only
+                        self.save_individual_json(analysis, analysis.get('original_filename', pdf_file.name))
+                    else:
+                        print(f"IRRELEVANT: {pdf_file.name} ({analysis['confidence']:.2f})")
+                        
+                except Exception as e:
+                    print(f"Error processing {pdf_file.name}: {e}")
         
-        with open(results_file, 'w', encoding='utf-8') as f:
-            json.dump(output_data, f, indent=2, ensure_ascii=False)
+        # Save results
+        relevant_count = len(relevant_analyses)
+        total_count = len(all_analyses)
         
-        # Save just relevant regulations
-        relevant_regulations = [doc for doc in all_analyses if doc["relevant"]]
-        if relevant_regulations:
+        # Save only relevant regulations (no complete analysis file)
+        if relevant_analyses:
             relevant_file = self.downloads_dir / "relevant_regulations.json"
+            output_data = {
+                "metadata": {
+                    "analysis_date": datetime.now().isoformat(),
+                    "criteria": relevance_criteria,
+                    "model": model,
+                    "confidence_threshold": confidence_threshold,
+                    "total_documents": total_count,
+                    "relevant_documents": relevant_count,
+                    "processing_mode": "PARALLEL_RELEVANT_ONLY"
+                },
+                "regulations": relevant_analyses
+            }
+            
             with open(relevant_file, 'w', encoding='utf-8') as f:
-                json.dump({
-                    "metadata": output_data["metadata"],
-                    "regulations": relevant_regulations
-                }, f, indent=2, ensure_ascii=False)
+                json.dump(output_data, f, indent=2, ensure_ascii=False)
         
-        print(f"✅ JSON-only processing complete!")
-        print(f"📊 Results: {relevant_count}/{len(pdf_files)} documents marked as relevant")
-        print(f"📄 Complete analysis: {results_file}")
-        print(f"📄 Relevant only: {relevant_file}")
-        print(f"📁 Individual JSON files: {self.downloads_dir}/individual_json/")
-        print(f"💾 PDF files remain unchanged in downloads/")
+        print(f"Processing complete!")
+        print(f"Results: {relevant_count}/{total_count} documents marked as relevant")
+        if relevant_analyses:
+            print(f"Relevant regulations saved to: {self.downloads_dir}/relevant_regulations.json")
+            print(f"Individual JSON files: {self.downloads_dir}/individual_json/")
+        else:
+            print("No relevant documents found.")
 
 
 def main():
