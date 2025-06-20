@@ -28,13 +28,15 @@ class DocSpider(scrapy.Spider):
         "DOWNLOAD_MAXSIZE": 50 * 1024 * 1024,  # 50MB max file size
         "DOWNLOAD_WARNSIZE": 10 * 1024 * 1024,  # Warn at 10MB
         
-        # Politeness and rate limiting
-        "DOWNLOAD_DELAY": 1,                # 1 second between requests
+        # High-performance settings
+        "CONCURRENT_REQUESTS": 32,          # Total concurrent requests
+        "CONCURRENT_REQUESTS_PER_DOMAIN": 16, # Per domain concurrency
+        "DOWNLOAD_DELAY": 0.5,              # Reduced delay between requests
         "RANDOMIZE_DOWNLOAD_DELAY": 0.5,    # Randomize delay ±50%
         "AUTOTHROTTLE_ENABLED": True,       # Auto-adjust delays
-        "AUTOTHROTTLE_START_DELAY": 1,      # Start with 1s delay
-        "AUTOTHROTTLE_MAX_DELAY": 10,       # Max 10s delay
-        "AUTOTHROTTLE_TARGET_CONCURRENCY": 2.0,  # Target 2 concurrent requests
+        "AUTOTHROTTLE_START_DELAY": 0.5,    # Start with 0.5s delay
+        "AUTOTHROTTLE_MAX_DELAY": 5,        # Max 5s delay
+        "AUTOTHROTTLE_TARGET_CONCURRENCY": 8.0,  # Target 8 concurrent requests
         
         # Memory management
         "MEMUSAGE_ENABLED": True,           # Monitor memory usage

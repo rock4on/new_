@@ -100,33 +100,28 @@ class BulkProcessor:
             print(f"❌ Error running scrapy for {url}: {e}")
             return False
     
-    def run_llm_filter(self):
-        """Run LLM filter on downloaded documents"""
-        print("🤖 Running LLM filter...")
+    def get_realtime_results(self):
+        """Get results from real-time LLM processing"""
+        print("📊 Collecting real-time analysis results...")
         
         try:
-            # Import and run the document processor directly
-            sys.path.append(str(self.base_dir))
-            from llm_filter import DocumentProcessor
-            
-            processor = DocumentProcessor(
-                downloads_dir=str(self.downloads_dir),
-                api_key=API_KEY,
-                base_url=BASE_URL
-            )
-            
-            processor.process_documents(
-                relevance_criteria=LLM_CRITERIA,
-                model=MODEL,
-                confidence_threshold=CONFIDENCE_THRESHOLD
-            )
-            
-            print("✅ LLM filtering completed")
-            return True
-            
+            results_file = self.downloads_dir / "live_regulatory_analysis.json"
+            if results_file.exists():
+                with open(results_file, 'r', encoding='utf-8') as f:
+                    analysis_data = json.load(f)
+                
+                relevant_count = analysis_data.get("metadata", {}).get("total_relevant_documents", 0)
+                total_processed = analysis_data.get("metadata", {}).get("total_processed", 0)
+                
+                print(f"✅ Real-time analysis complete: {relevant_count} relevant docs out of {total_processed} processed")
+                return relevant_count, total_processed, analysis_data
+            else:
+                print("⚠️ No real-time analysis results found")
+                return 0, 0, None
+                
         except Exception as e:
-            print(f"❌ Error running LLM filter: {e}")
-            return False
+            print(f"❌ Error reading real-time results: {e}")
+            return 0, 0, None
     
     def organize_results(self, url):
         """Organize results for current URL"""
@@ -190,6 +185,54 @@ class BulkProcessor:
         
         return relevant_count, total_count
     
+    def organize_results_new(self, url, analysis_data):
+        """Organize results using real-time analysis data"""
+        domain = self.get_domain_name(url)
+        
+        if ORGANIZE_BY_DOMAIN:
+            url_results_dir = self.session_dir / domain
+        else:
+            url_results_dir = self.session_dir / f"url_{len(self.processed_urls)+1}"
+        
+        url_results_dir.mkdir(exist_ok=True)
+        
+        # Get counts from metadata
+        metadata = analysis_data.get("metadata", {})
+        relevant_count = metadata.get("total_relevant_documents", 0)
+        total_count = metadata.get("total_processed", 0)
+        
+        # Copy the real-time analysis file
+        analysis_source = self.downloads_dir / "live_regulatory_analysis.json"
+        if analysis_source.exists():
+            shutil.copy(str(analysis_source), str(url_results_dir / "regulatory_analysis.json"))
+        
+        # Create URL summary with enhanced info
+        summary = {
+            "url": url,
+            "domain": domain,
+            "processed_at": datetime.now().isoformat(),
+            "total_documents": total_count,
+            "relevant_documents": relevant_count,
+            "irrelevant_documents": total_count - relevant_count,
+            "criteria": analysis_data.get("metadata", {}).get("criteria", "Unknown"),
+            "model_used": analysis_data.get("metadata", {}).get("model", "Unknown"),
+            "confidence_threshold": analysis_data.get("metadata", {}).get("confidence_threshold", 0.7),
+            "processing_method": "Real-time LLM analysis during crawling"
+        }
+        
+        with open(url_results_dir / "summary.json", "w") as f:
+            json.dump(summary, f, indent=2)
+        
+        # Update totals
+        self.total_docs_downloaded += total_count
+        self.total_relevant_docs += relevant_count
+        
+        print(f"📁 Results organized in: {url_results_dir}")
+        print(f"📊 Found {relevant_count}/{total_count} relevant documents")
+        print(f"⚡ Real-time processing: No separate LLM filtering step needed!")
+        
+        return relevant_count, total_count
+    
     def clean_downloads(self):
         """Clean downloads directory"""
         if self.downloads_dir.exists():
@@ -214,18 +257,19 @@ class BulkProcessor:
                     print("🧹 Cleaning downloads directory...")
                     self.clean_downloads()
                 
-                # Step 1: Run scrapy spider
+                # Step 1: Run scrapy spider (with real-time LLM processing)
                 if not self.run_scrapy_spider(url):
                     self.failed_urls.append(url)
                     continue
                 
-                # Step 2: Run LLM filter  
-                if not self.run_llm_filter():
+                # Step 2: Get real-time analysis results
+                relevant_count, total_count, analysis_data = self.get_realtime_results()
+                if analysis_data is None:
                     self.failed_urls.append(url)
                     continue
                 
                 # Step 3: Organize results
-                relevant_count, total_count = self.organize_results(url)
+                relevant_count, total_count = self.organize_results_new(url, analysis_data)
                 
                 self.processed_urls.append({
                     "url": url,

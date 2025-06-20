@@ -4,6 +4,17 @@ from langdetect import detect
 from pathlib import Path
 import json
 from datetime import datetime
+import asyncio
+import aiohttp
+from concurrent.futures import ThreadPoolExecutor
+from io import BytesIO
+import PyPDF2
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.pydantic_v1 import BaseModel, Field
+from typing import List, Dict, Any
+import os
 
 class MetaPipeline:
     """Extract PDF metadata and save URL mapping for LLM processing."""
@@ -55,3 +66,274 @@ class MetaPipeline:
                 json.dump(self.pdf_metadata, f, indent=2, ensure_ascii=False)
             
             spider.logger.info(f"Saved PDF metadata for {len(self.pdf_metadata)} files to {metadata_file}")
+
+
+class DocumentAnalysis(BaseModel):
+    """Pydantic model for comprehensive document analysis and extraction"""
+    relevant: bool = Field(description="Whether the document is relevant")
+    confidence: float = Field(description="Confidence score between 0.0 and 1.0")
+    
+    # Core regulation information
+    unique_id: str = Field(description="Unique identifier for the regulation")
+    country: str = Field(description="Country where regulation applies")
+    jurisdiction: str = Field(description="Specific jurisdiction (state, province, etc.)")
+    issuing_body: str = Field(description="Authority or body that issued the regulation")
+    tag: str = Field(description="Disclosure area/category (e.g., ESG, Financial, Tax)")
+    regulation_name: str = Field(description="Official name of the regulation")
+    publication_date: str = Field(description="Date of publication (YYYY-MM-DD format)")
+    regulation_status: str = Field(description="Status (Draft, Final, Effective, Superseded)")
+    
+    # Content and applicability
+    summary: str = Field(description="Summary of regulation and disclosure requirements")
+    applicability: str = Field(description="Scope summary - who/what it applies to")
+    scoping_threshold: str = Field(description="Minimum thresholds for applicability")
+    effective_date: str = Field(description="Earliest mandatory reporting effective date (YYYY-MM-DD)")
+    timeline_details: str = Field(description="Implementation timeline and key dates")
+    
+    # Reporting requirements
+    financial_integration: str = Field(description="Integration with financial reporting (Yes/No/Partial)")
+    filing_mechanism: str = Field(description="How/where to file reports")
+    reporting_frequency: str = Field(description="Required reporting frequency")
+    assurance_requirement: str = Field(description="Assurance/audit requirements")
+    penalties: str = Field(description="Non-compliance penalties")
+    
+    # Metadata
+    full_text_link: str = Field(description="Link to the full regulation text")
+    translated_flag: bool = Field(description="Whether document was translated to English")
+    source_url: str = Field(description="URL where document was scraped from")
+    last_scraped: str = Field(description="Date when document was scraped (YYYY-MM-DD)")
+    change_detected: bool = Field(description="Whether changes were detected from previous version")
+
+
+class LLMFilterPipeline:
+    """Real-time LLM processing pipeline - analyzes PDFs during crawling"""
+    
+    def __init__(self):
+        # Configuration
+        self.api_key = os.getenv("OPENAI_API_KEY", "your-api-key-here")
+        self.base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        self.model = "gpt-4o-mini"
+        self.confidence_threshold = 0.7
+        self.criteria = "regulatory, compliance, and legal documents related to financial reporting and disclosure requirements"
+        
+        # LLM setup
+        self.llm = ChatOpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            temperature=0.1,
+            model=self.model
+        )
+        
+        self.parser = JsonOutputParser(pydantic_object=DocumentAnalysis)
+        
+        self.prompt = ChatPromptTemplate.from_template("""
+You are an expert regulatory document analyzer. Analyze the following document and extract comprehensive regulatory information.
+
+ANALYSIS CRITERIA:
+{criteria}
+
+DOCUMENT TEXT:
+{document_text}
+
+SOURCE URL: {source_url}
+DOCUMENT FILENAME: {filename}
+
+INSTRUCTIONS:
+1. First determine if this document is relevant to the criteria (regulatory/compliance/legal documents)
+2. If relevant, extract ALL available regulatory information
+3. If the document is not in English, translate all extracted information to English
+4. Use "Unknown" or "Not specified" for fields that cannot be determined from the document
+5. For dates, use YYYY-MM-DD format or "Unknown" if not available
+6. Generate a unique ID using format: COUNTRY_AUTHORITY_YEAR_SHORTNAME
+7. Set translated_flag to true if you translated any content
+8. Set change_detected to false (this is for tracking document changes over time)
+9. Use today's date for last_scraped field
+
+{format_instructions}
+""")
+        
+        self.chain = self.prompt | self.llm | self.parser
+        
+        # Async processing
+        self.executor = ThreadPoolExecutor(max_workers=5)
+        self.regulatory_data = []
+        self.processed_count = 0
+        
+    def extract_pdf_text(self, file_content: bytes, filename: str) -> str:
+        """Extract text from PDF content"""
+        try:
+            pdf_stream = BytesIO(file_content)
+            reader = PyPDF2.PdfReader(pdf_stream)
+            text = ""
+            
+            # Extract text from first 5 pages
+            for i, page in enumerate(reader.pages[:5]):
+                text += page.extract_text() + "\n"
+            
+            return text.strip()
+        except Exception as e:
+            print(f"Error extracting text from {filename}: {e}")
+            return ""
+    
+    async def analyze_document_async(self, document_text: str, source_url: str, filename: str) -> Dict[str, Any]:
+        """Async LLM analysis"""
+        try:
+            # Truncate text if too long
+            if len(document_text) > 8000:
+                document_text = document_text[:8000] + "...[truncated]"
+            
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            
+            # Run LLM analysis in thread pool to avoid blocking
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                self.executor,
+                lambda: self.chain.invoke({
+                    "criteria": self.criteria,
+                    "document_text": document_text,
+                    "source_url": source_url,
+                    "filename": filename,
+                    "format_instructions": self.parser.get_format_instructions()
+                })
+            )
+            
+            # Ensure metadata fields are populated
+            if not result.get("last_scraped"):
+                result["last_scraped"] = current_date
+            if not result.get("source_url"):
+                result["source_url"] = source_url
+            if result.get("change_detected") is None:
+                result["change_detected"] = False
+            
+            return result
+            
+        except Exception as e:
+            print(f"Error analyzing document {filename}: {e}")
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            return {
+                "relevant": False,
+                "confidence": 0.0,
+                "unique_id": f"ERROR_{current_date}_{hash(filename) % 10000}",
+                "country": "Unknown",
+                "jurisdiction": "Unknown", 
+                "issuing_body": "Unknown",
+                "tag": "Error",
+                "regulation_name": "Analysis Failed",
+                "publication_date": "Unknown",
+                "regulation_status": "Unknown",
+                "summary": f"Error in analysis: {str(e)}",
+                "applicability": "Unknown",
+                "scoping_threshold": "Unknown",
+                "effective_date": "Unknown",
+                "timeline_details": "Unknown",
+                "financial_integration": "Unknown",
+                "filing_mechanism": "Unknown",
+                "reporting_frequency": "Unknown",
+                "assurance_requirement": "Unknown",
+                "penalties": "Unknown",
+                "full_text_link": source_url,
+                "translated_flag": False,
+                "source_url": source_url,
+                "last_scraped": current_date,
+                "change_detected": False
+            }
+    
+    def process_item(self, item, spider):
+        """Process PDF items in real-time"""
+        adapter = ItemAdapter(item)
+        files = adapter.get('files', [])
+        
+        if not files:
+            return item
+            
+        # Process each downloaded file
+        for file_info in files:
+            file_path = Path(spider.settings["FILES_STORE"]) / file_info["path"]
+            
+            if file_path.suffix.lower() == ".pdf":
+                try:
+                    # Read PDF content
+                    with open(file_path, 'rb') as f:
+                        file_content = f.read()
+                    
+                    # Extract text
+                    text = self.extract_pdf_text(file_content, file_path.name)
+                    if not text:
+                        spider.logger.warning(f"Could not extract text from {file_path.name}")
+                        continue
+                    
+                    # Get metadata
+                    pdf_url = adapter.get("pdf_url", "Unknown")
+                    
+                    # Run async LLM analysis
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    
+                    try:
+                        analysis = loop.run_until_complete(
+                            self.analyze_document_async(text, pdf_url, file_path.name)
+                        )
+                    finally:
+                        loop.close()
+                    
+                    # Decision based on relevance and confidence
+                    is_relevant = (analysis["relevant"] and 
+                                 analysis["confidence"] >= self.confidence_threshold)
+                    
+                    if is_relevant:
+                        # Keep the PDF file
+                        spider.logger.info(f"✅ RELEVANT: {file_path.name} - {analysis.get('regulation_name', 'Unknown')}")
+                        
+                        # Add to regulatory data
+                        analysis["filename"] = file_path.name
+                        analysis["file_path"] = str(file_path)
+                        self.regulatory_data.append(analysis)
+                        
+                        # Save relevant regulation immediately to JSON
+                        self.save_regulatory_data(spider)
+                        
+                    else:
+                        # Remove irrelevant PDF
+                        spider.logger.info(f"❌ IRRELEVANT: {file_path.name} - Confidence: {analysis['confidence']:.2f}")
+                        try:
+                            file_path.unlink()  # Delete the file
+                        except Exception as e:
+                            spider.logger.error(f"Could not delete {file_path}: {e}")
+                    
+                    self.processed_count += 1
+                    
+                except Exception as e:
+                    spider.logger.error(f"Error processing {file_path}: {e}")
+        
+        return item
+    
+    def save_regulatory_data(self, spider):
+        """Save regulatory data to JSON file"""
+        if self.regulatory_data:
+            downloads_dir = Path(spider.settings["FILES_STORE"])
+            output_file = downloads_dir / "live_regulatory_analysis.json"
+            
+            output_data = {
+                "metadata": {
+                    "last_updated": datetime.now().isoformat(),
+                    "criteria": self.criteria,
+                    "model": self.model,
+                    "confidence_threshold": self.confidence_threshold,
+                    "total_relevant_documents": len(self.regulatory_data),
+                    "total_processed": self.processed_count
+                },
+                "regulations": self.regulatory_data
+            }
+            
+            with open(output_file, 'w', encoding='utf-8') as f:
+                json.dump(output_data, f, indent=2, ensure_ascii=False)
+    
+    def close_spider(self, spider):
+        """Final processing when spider closes"""
+        spider.logger.info(f"🎯 Processing complete: {len(self.regulatory_data)} relevant documents found out of {self.processed_count} processed")
+        
+        # Final save
+        self.save_regulatory_data(spider)
+        
+        # Cleanup
+        self.executor.shutdown(wait=True)
