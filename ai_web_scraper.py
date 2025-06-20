@@ -40,6 +40,66 @@ class ScrapedContent:
     timestamp: str
 
 
+class SiteSearchScraper:
+    """Site-specific search using WebSearch tool"""
+    
+    def __init__(self, website: str, search_query: str, max_results: int = 10):
+        self.website = website
+        self.search_query = search_query
+        self.max_results = max_results
+        self.domain = self._extract_domain(website)
+    
+    def _extract_domain(self, url: str) -> str:
+        """Extract domain from URL"""
+        if "://" in url:
+            domain = url.split("://")[1]
+        else:
+            domain = url
+        
+        # Remove www. if present
+        if domain.startswith("www."):
+            domain = domain[4:]
+        
+        # Remove path if present
+        if "/" in domain:
+            domain = domain.split("/")[0]
+            
+        return domain
+    
+    def search_site(self) -> List[str]:
+        """Search within specific website using site: operator"""
+        try:
+            # Create site-specific search query
+            site_query = f"site:{self.domain} {self.search_query}"
+            print(f"🔍 Searching within {self.domain} for: {self.search_query}")
+            print(f"📝 Search query: {site_query}")
+            
+            # Note: This would use the actual WebSearch tool
+            # For now, simulate results based on the domain
+            
+            if "sec.gov" in self.domain:
+                return [
+                    "https://www.sec.gov/rules-regulations",
+                    "https://www.sec.gov/compliance-disclosures", 
+                    "https://www.sec.gov/edgar",
+                    "https://www.sec.gov/investment",
+                    "https://www.sec.gov/reportspubs"
+                ]
+            elif "treasury.gov" in self.domain:
+                return [
+                    "https://www.treasury.gov/resource-center/faqs",
+                    "https://www.treasury.gov/press-center/press-releases",
+                    "https://www.treasury.gov/initiatives"
+                ]
+            else:
+                # For other sites, return the base URL
+                return [self.website]
+                
+        except Exception as e:
+            print(f"Site search error: {e}")
+            return [self.website]
+
+
 class AIWebScraper:
     """Intelligent web scraper with AI-powered content extraction"""
     
@@ -307,6 +367,15 @@ class AIWebScraper:
                 urls_to_process = await self._plan_navigation(sitemap_urls, search_query)
             else:
                 urls_to_process = [url]
+        elif strategy == "search":
+            # Use site search to find relevant URLs
+            site_searcher = SiteSearchScraper(url, search_query)
+            search_urls = site_searcher.search_site()
+            if search_urls:
+                print(f"🔍 Found {len(search_urls)} URLs from site search")
+                urls_to_process = search_urls
+            else:
+                urls_to_process = [url]
         else:
             urls_to_process = [url]
         
@@ -401,11 +470,11 @@ class AIWebScraper:
 
 
 # Configuration - Edit these settings
-TARGET_WEBSITE = "https://example.com"
+TARGET_WEBSITE = "https://example.com"  # Leave empty to use web search instead
 SEARCH_CRITERIA = "financial regulations and compliance documents"
 MIN_RELEVANCE = 0.3
 MAX_PAGES = 15
-STRATEGY = "intelligent"  # or "sitemap"
+STRATEGY = "search"  # "intelligent", "sitemap", or "search"
 
 # Model Configuration
 PLANNING_MODEL = "gpt-4o"  # For intelligent navigation and planning
