@@ -54,8 +54,15 @@ class DocSpider(scrapy.Spider):
         parsed_url = urlparse(start_url)
         self.allowed_domains = [parsed_url.netloc]
         
+        # Store the base URL path to restrict crawling
+        self.base_url = start_url.rstrip('/')
+        
         # Initialize metadata tracking
         self.pdf_metadata = []
+
+    def is_url_allowed(self, url):
+        """Check if URL is within the allowed base URL path"""
+        return url.startswith(self.base_url)
 
     def parse(self, response):
         # Extract and save page text content
@@ -70,7 +77,7 @@ class DocSpider(scrapy.Spider):
         for href in response.css("a::attr(href)").getall():
             link_count += 1
             url = response.urljoin(href.strip())
-            if self.allowed_domains[0] in url:
+            if self.allowed_domains[0] in url and self.is_url_allowed(url):
                 if PDF_RE.search(url):
                     pdf_count += 1
                     self.logger.info(f"📄 Found PDF #{pdf_count}: {url}")
