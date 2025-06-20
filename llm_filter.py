@@ -205,17 +205,31 @@ INSTRUCTIONS:
             }
     
     def load_pdf_metadata(self):
-        """Load PDF metadata from Scrapy output."""
-        metadata_file = self.downloads_dir / "pdf_metadata.json"
-        if metadata_file.exists():
+        """Load PDF metadata from individual JSON files in downloads directory."""
+        metadata_mapping = {}
+        
+        # Look for individual metadata files (*.json) in main downloads directory
+        json_files = list(self.downloads_dir.glob("*.json"))
+        
+        for json_file in json_files:
+            # Skip the analysis output files
+            if json_file.name in ["regulatory_analysis.json", "relevant_regulations.json", "pdf_metadata.json"]:
+                continue
+                
             try:
-                with open(metadata_file, 'r', encoding='utf-8') as f:
-                    metadata_list = json.load(f)
-                # Create filename to metadata mapping
-                return {item["filename"]: item for item in metadata_list}
+                with open(json_file, 'r', encoding='utf-8') as f:
+                    metadata = json.load(f)
+                
+                # Use the filename from metadata as key
+                if "filename" in metadata:
+                    metadata_mapping[metadata["filename"]] = metadata
+                    print(f"📋 Loaded metadata for: {metadata['filename']}")
+                    
             except Exception as e:
-                print(f"Warning: Could not load PDF metadata: {e}")
-        return {}
+                print(f"Warning: Could not load metadata from {json_file}: {e}")
+        
+        print(f"📊 Loaded metadata for {len(metadata_mapping)} PDFs")
+        return metadata_mapping
 
     def save_individual_json(self, analysis: Dict[str, Any], pdf_filename: str):
         """Save individual JSON file for each processed PDF"""
@@ -237,9 +251,11 @@ INSTRUCTIONS:
                          confidence_threshold: float = 0.7):
         """Process all PDFs and output only JSON analysis (no file moving/organizing)"""
         
-        pdf_files = list(self.downloads_dir.glob("*.pdf"))
+        # PDFs are in downloads/full/ subdirectory
+        pdf_dir = self.downloads_dir / "full"
+        pdf_files = list(pdf_dir.glob("*.pdf"))
         if not pdf_files:
-            print("No PDF files found in downloads directory")
+            print(f"No PDF files found in {pdf_dir}")
             return
         
         # Load metadata mapping
@@ -262,25 +278,33 @@ INSTRUCTIONS:
                 print(f"  ❌ Could not extract text, skipping")
                 continue
             
-            # Get comprehensive metadata
+            # Get comprehensive metadata from individual JSON files
             file_metadata = pdf_metadata.get(pdf_file.name, {})
             pdf_url = file_metadata.get("pdf_url", "Unknown")
             src_page = file_metadata.get("src_page", "Unknown")
-            file_size = file_metadata.get("file_size", 0)
-            page_count = file_metadata.get("page_count", 0)
-            detected_language = file_metadata.get("language", "unknown")
+            original_filename = file_metadata.get("original_filename", pdf_file.name)
+            title = file_metadata.get("title", "Unknown")
+            scraped_at = file_metadata.get("scraped_at", "Unknown")
+            
+            # Get file stats from actual PDF
+            file_size = pdf_file.stat().st_size if pdf_file.exists() else 0
             
             print(f"  📎 PDF URL: {pdf_url}")
-            print(f"  📄 Pages: {page_count}, Size: {file_size} bytes")
+            print(f"  📄 Original: {original_filename}, Size: {file_size} bytes")
+            print(f"  📋 Title: {title}")
+            print(f"  📁 PDF Location: downloads/full/{pdf_file.name}")
             
             # Comprehensive document analysis with ALL text
-            analysis = self.analyze_document(text, relevance_criteria, pdf_url, pdf_file.name, model)
+            analysis = self.analyze_document(text, relevance_criteria, pdf_url, original_filename, model)
             
-            # Add extra metadata from file system
+            # Add extra metadata from scrapy and file system
             analysis["file_size"] = file_size
-            analysis["page_count"] = page_count
-            analysis["detected_language"] = detected_language
+            analysis["original_filename"] = original_filename
+            analysis["scrapy_filename"] = pdf_file.name
+            analysis["pdf_file_path"] = f"downloads/full/{pdf_file.name}"
+            analysis["title_from_link"] = title
             analysis["src_page"] = src_page
+            analysis["scraped_at"] = scraped_at
             analysis["full_text_available"] = len(text) > 0
             analysis["text_length"] = len(text)
             
@@ -311,7 +335,7 @@ INSTRUCTIONS:
             all_analyses.append(analysis)
             
             # Save individual JSON file for this PDF
-            self.save_individual_json(analysis, pdf_file.name)
+            self.save_individual_json(analysis, original_filename or pdf_file.name)
         
         # Save comprehensive JSON results ONLY
         results_file = self.downloads_dir / "regulatory_analysis.json"
