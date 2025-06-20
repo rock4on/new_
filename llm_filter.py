@@ -139,6 +139,21 @@ INSTRUCTIONS:
             print(f"Error extracting text from {pdf_path}: {e}")
             return ""
     
+    def extract_text_file(self, text_path: Path, max_chars: int = 8000) -> str:
+        """Extract text from text file"""
+        try:
+            with open(text_path, 'r', encoding='utf-8') as file:
+                text = file.read()
+                
+                # Truncate if too long
+                if max_chars and len(text) > max_chars:
+                    text = text[:max_chars] + "...[truncated]"
+                
+                return text.strip()
+        except Exception as e:
+            print(f"Error reading text from {text_path}: {e}")
+            return ""
+    
     def analyze_document(self, document_text: str, relevance_criteria: str, source_url: str, filename: str, model: str = "gpt-4o-mini") -> Dict[str, Any]:
         """Use LangChain LLM to comprehensively analyze regulatory document"""
         
@@ -204,8 +219,8 @@ INSTRUCTIONS:
                 "change_detected": False
             }
     
-    def load_pdf_metadata(self):
-        """Load PDF metadata from individual JSON files in downloads directory."""
+    def load_document_metadata(self):
+        """Load document metadata from individual JSON files in downloads directory."""
         metadata_mapping = {}
         
         # Look for individual metadata files (*.json) in main downloads directory
@@ -227,7 +242,7 @@ INSTRUCTIONS:
             except Exception as e:
                 print(f"Warning: Could not load metadata from {json_file}: {e}")
         
-        print(f"Loaded metadata for {len(metadata_mapping)} PDFs")
+        print(f"Loaded metadata for {len(metadata_mapping)} documents")
         return metadata_mapping
 
     def save_individual_json(self, analysis: Dict[str, Any], pdf_filename: str):
@@ -246,26 +261,39 @@ INSTRUCTIONS:
         
         print(f"Saved individual JSON: {json_path}")
 
-    def process_single_pdf(self, pdf_file: Path, pdf_metadata: dict, relevance_criteria: str, 
-                          confidence_threshold: float, model: str) -> tuple:
-        """Process a single PDF file (for parallel processing)"""
+    def process_single_document(self, doc_file: Path, document_metadata: dict, relevance_criteria: str, 
+                               confidence_threshold: float, model: str) -> tuple:
+        """Process a single document file (PDF or text) for parallel processing"""
         
-        # Extract text from PDF
-        text = self.extract_pdf_text(pdf_file, max_pages=None)
+        # Extract text based on file type
+        if doc_file.suffix.lower() == '.pdf':
+            text = self.extract_pdf_text(doc_file, max_pages=None)
+        elif doc_file.suffix.lower() == '.txt':
+            text = self.extract_text_file(doc_file)
+        else:
+            return None, False
+        
         if not text:
             return None, False
         
         # Get metadata
-        file_metadata = pdf_metadata.get(pdf_file.name, {})
-        pdf_url = file_metadata.get("pdf_url", "Unknown")
+        file_metadata = document_metadata.get(doc_file.name, {})
+        
+        # Handle both PDF and text metadata structures
+        if doc_file.suffix.lower() == '.pdf':
+            source_url = file_metadata.get("pdf_url", "Unknown")
+        else:  # text file
+            source_url = file_metadata.get("content_url", "Unknown")
+        
         src_page = file_metadata.get("src_page", "Unknown")
-        original_filename = file_metadata.get("original_filename", pdf_file.name)
+        original_filename = file_metadata.get("original_filename", doc_file.name)
         title = file_metadata.get("title", "Unknown")
         scraped_at = file_metadata.get("scraped_at", "Unknown")
-        file_size = pdf_file.stat().st_size if pdf_file.exists() else 0
+        file_size = doc_file.stat().st_size if doc_file.exists() else 0
+        content_type = file_metadata.get("content_type", "pdf" if doc_file.suffix.lower() == '.pdf' else "text")
         
         # LLM analysis
-        analysis = self.analyze_document(text, relevance_criteria, pdf_url, original_filename, model)
+        analysis = self.analyze_document(text, relevance_criteria, source_url, original_filename, model)
         
         # Add clean metadata (removed unwanted fields)
         analysis["file_size"] = file_size
@@ -275,8 +303,9 @@ INSTRUCTIONS:
         analysis["scraped_at"] = scraped_at
         analysis["full_text_available"] = len(text) > 0
         analysis["text_length"] = len(text)
-        analysis["filename"] = pdf_file.name
-        analysis["file_path"] = str(pdf_file)
+        analysis["filename"] = doc_file.name
+        analysis["file_path"] = str(doc_file)
+        analysis["content_type"] = content_type
         analysis["processed_at"] = datetime.now().isoformat()
         
         # Check if relevant
@@ -287,19 +316,26 @@ INSTRUCTIONS:
 
     def process_documents(self, relevance_criteria: str, model: str = "gpt-4o-mini", 
                          confidence_threshold: float = 0.7):
-        """Process all PDFs in parallel for speed"""
+        """Process all PDFs and text files in parallel for speed"""
         
-        # PDFs are in downloads/full/ subdirectory
+        # Get PDF files from downloads/full/ subdirectory
         pdf_dir = self.downloads_dir / "full"
-        pdf_files = list(pdf_dir.glob("*.pdf"))
-        if not pdf_files:
-            print(f"No PDF files found in {pdf_dir}")
+        pdf_files = list(pdf_dir.glob("*.pdf")) if pdf_dir.exists() else []
+        
+        # Get text files from downloads/text/ subdirectory
+        text_dir = self.downloads_dir / "text"
+        text_files = list(text_dir.glob("*.txt")) if text_dir.exists() else []
+        
+        all_files = pdf_files + text_files
+        
+        if not all_files:
+            print(f"No PDF or text files found in {pdf_dir} or {text_dir}")
             return
         
         # Load metadata mapping
-        pdf_metadata = self.load_pdf_metadata()
+        document_metadata = self.load_document_metadata()
         
-        print(f"Processing {len(pdf_files)} documents in parallel...")
+        print(f"Processing {len(all_files)} documents ({len(pdf_files)} PDFs, {len(text_files)} text files) in parallel...")
         print(f"Analysis criteria: {relevance_criteria}")
         print(f"Confidence threshold: {confidence_threshold}")
         print("-" * 80)
@@ -307,36 +343,38 @@ INSTRUCTIONS:
         all_analyses = []
         relevant_analyses = []
         
-        # Process PDFs in parallel using ThreadPoolExecutor
+        # Process all files in parallel using ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=4) as executor:
             # Submit all tasks
-            future_to_pdf = {
-                executor.submit(self.process_single_pdf, pdf_file, pdf_metadata, 
-                               relevance_criteria, confidence_threshold, model): pdf_file 
-                for pdf_file in pdf_files
+            future_to_file = {
+                executor.submit(self.process_single_document, doc_file, document_metadata, 
+                               relevance_criteria, confidence_threshold, model): doc_file 
+                for doc_file in all_files
             }
             
             # Collect results as they complete
-            for future in as_completed(future_to_pdf):
-                pdf_file = future_to_pdf[future]
+            for future in as_completed(future_to_file):
+                doc_file = future_to_file[future]
                 try:
                     analysis, is_relevant = future.result()
                     if analysis is None:
-                        print(f"Skipped: {pdf_file.name} (no text)")
+                        print(f"Skipped: {doc_file.name} (no content)")
                         continue
                         
                     all_analyses.append(analysis)
                     
                     if is_relevant:
                         relevant_analyses.append(analysis)
-                        print(f"RELEVANT: {analysis.get('regulation_name', 'Unknown')} ({analysis['confidence']:.2f})")
+                        content_type = "PDF" if doc_file.suffix == ".pdf" else "TEXT"
+                        print(f"RELEVANT ({content_type}): {analysis.get('regulation_name', 'Unknown')} ({analysis['confidence']:.2f})")
                         # Save individual JSON for relevant files only
-                        self.save_individual_json(analysis, analysis.get('original_filename', pdf_file.name))
+                        self.save_individual_json(analysis, analysis.get('original_filename', doc_file.name))
                     else:
-                        print(f"IRRELEVANT: {pdf_file.name} ({analysis['confidence']:.2f})")
+                        content_type = "PDF" if doc_file.suffix == ".pdf" else "TEXT"
+                        print(f"IRRELEVANT ({content_type}): {doc_file.name} ({analysis['confidence']:.2f})")
                         
                 except Exception as e:
-                    print(f"Error processing {pdf_file.name}: {e}")
+                    print(f"Error processing {doc_file.name}: {e}")
         
         # Save results
         relevant_count = len(relevant_analyses)
@@ -353,6 +391,8 @@ INSTRUCTIONS:
                     "confidence_threshold": confidence_threshold,
                     "total_documents": total_count,
                     "relevant_documents": relevant_count,
+                    "pdf_count": len(pdf_files),
+                    "text_count": len(text_files),
                     "processing_mode": "PARALLEL_RELEVANT_ONLY"
                 },
                 "regulations": relevant_analyses
@@ -371,8 +411,8 @@ INSTRUCTIONS:
 
 
 def main():
-    print("🔍 Starting PDF Document Filter...")
-    print(f"📁 Looking for PDFs in: {DEFAULT_DOWNLOADS_DIR}")
+    print("🔍 Starting Document Filter (PDFs and Text)...")
+    print(f"📁 Looking for documents in: {DEFAULT_DOWNLOADS_DIR}")
     print(f"🎯 Search criteria: {RELEVANCE_CRITERIA}")
     print(f"🤖 Using model: {DEFAULT_MODEL}")
     print(f"📊 Confidence threshold: {DEFAULT_CONFIDENCE_THRESHOLD}")

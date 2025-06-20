@@ -58,6 +58,11 @@ class DocSpider(scrapy.Spider):
         self.pdf_metadata = []
 
     def parse(self, response):
+        # Extract and save page text content
+        page_text = self.extract_page_content(response)
+        if page_text and len(page_text.strip()) > 500:  # Only save substantial content
+            self.save_page_content(response, page_text)
+        
         # Download all PDFs found
         pdf_count = 0
         link_count = 0
@@ -102,6 +107,56 @@ class DocSpider(scrapy.Spider):
                     yield response.follow(url, self.parse)
         
         self.logger.info(f"📊 Page {response.url}: Found {pdf_count} PDFs out of {link_count} links")
+    
+    def extract_page_content(self, response):
+        """Extract meaningful text content from web page"""
+        # Remove script and style elements
+        text_content = response.css('body *:not(script):not(style)::text').getall()
+        
+        # Join and clean text
+        page_text = ' '.join(text_content)
+        page_text = ' '.join(page_text.split())  # Normalize whitespace
+        
+        return page_text
+    
+    def save_page_content(self, response, page_text):
+        """Save page content as text file with metadata"""
+        downloads_dir = Path(self.settings["FILES_STORE"])
+        downloads_dir.mkdir(exist_ok=True)
+        
+        # Generate filename using same logic as PDFs
+        url_hash = hashlib.sha1(response.url.encode()).hexdigest()
+        text_filename = f"{url_hash}.txt"
+        
+        # Save text content
+        text_dir = downloads_dir / "text"
+        text_dir.mkdir(exist_ok=True)
+        text_file = text_dir / text_filename
+        
+        with open(text_file, 'w', encoding='utf-8') as f:
+            f.write(page_text)
+        
+        # Create metadata for text content
+        metadata = {
+            "filename": text_filename,
+            "original_filename": f"{response.url.split('/')[-1] or 'index'}.txt",
+            "content_url": response.url,
+            "src_page": response.url,
+            "title": response.css('title::text').get() or response.url.split('/')[-1],
+            "scraped_at": datetime.now().isoformat(),
+            "status": "text_extracted",
+            "content_type": "text",
+            "text_length": len(page_text)
+        }
+        
+        # Save individual metadata for text content
+        json_filename = text_filename.replace('.txt', '.json')
+        metadata_file = downloads_dir / json_filename
+        
+        with open(metadata_file, 'w', encoding='utf-8') as f:
+            json.dump(metadata, f, indent=2, ensure_ascii=False)
+        
+        self.logger.info(f"📝 Saved text content: {text_filename} ({len(page_text)} chars)")
     
     def save_individual_metadata(self, metadata):
         """Save individual metadata file for each PDF"""
