@@ -38,15 +38,18 @@ class MetaPipeline:
                     except Exception:
                         ad["language"] = "unknown"
                     
-                    # Save metadata with URL mapping
+                    # Save comprehensive metadata with URL mapping
                     metadata = {
                         "filename": f["path"].split("/")[-1],  # Just the filename
-                        "pdf_url": ad.get("pdf_url", "Unknown"),
-                        "src_page": ad.get("src_page", "Unknown"), 
-                        "title": ad.get("title", "Unknown"),
-                        "page_count": ad.get("page_count", 0),
-                        "language": ad.get("language", "unknown"),
-                        "scraped_at": datetime.now().isoformat()
+                        "file_path": str(pdf_path),            # Full file path
+                        "pdf_url": ad.get("pdf_url", "Unknown"), # Direct PDF URL
+                        "src_page": ad.get("src_page", "Unknown"), # Source page URL
+                        "title": ad.get("title", "Unknown"),    # Link text/title
+                        "page_count": ad.get("page_count", 0),  # Number of pages
+                        "language": ad.get("language", "unknown"), # Detected language
+                        "file_size": pdf_path.stat().st_size if pdf_path.exists() else 0,
+                        "scraped_at": datetime.now().isoformat(),
+                        "status": "downloaded"
                     }
                     
                     self.pdf_metadata.append(metadata)

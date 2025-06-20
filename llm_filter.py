@@ -67,12 +67,6 @@ RELEVANCE_CRITERIA = "documents related to financial regulations, compliance, an
 class DocumentProcessor:
     def __init__(self, downloads_dir: str = "downloads", api_key: str = None, base_url: str = None):
         self.downloads_dir = Path(downloads_dir)
-        self.relevant_dir = self.downloads_dir / "relevant"
-        self.irrelevant_dir = self.downloads_dir / "irrelevant"
-        
-        # Create directories
-        self.relevant_dir.mkdir(exist_ok=True)
-        self.irrelevant_dir.mkdir(exist_ok=True)
         
         # Setup LangChain ChatOpenAI with fallback priority:
         # 1. Command line arguments
@@ -118,15 +112,27 @@ INSTRUCTIONS:
         self.chain = self.prompt | self.llm | self.parser
     
     def extract_pdf_text(self, pdf_path: Path, max_pages: int = 5) -> str:
-        """Extract text from first few pages of PDF"""
+        """Extract text from PDF - all pages if max_pages=None, otherwise first max_pages"""
         try:
             with open(pdf_path, 'rb') as file:
                 reader = PyPDF2.PdfReader(file)
                 text = ""
                 
-                # Extract text from first max_pages pages
-                for i, page in enumerate(reader.pages[:max_pages]):
-                    text += page.extract_text() + "\n"
+                # Determine pages to extract
+                if max_pages is None:
+                    # Extract ALL pages
+                    pages_to_extract = reader.pages
+                    print(f"    📖 Extracting ALL {len(reader.pages)} pages")
+                else:
+                    # Extract only first max_pages
+                    pages_to_extract = reader.pages[:max_pages]
+                    print(f"    📖 Extracting first {min(max_pages, len(reader.pages))} pages")
+                
+                # Extract text from selected pages
+                for i, page in enumerate(pages_to_extract):
+                    page_text = page.extract_text()
+                    if page_text:
+                        text += page_text + "\n"
                 
                 return text.strip()
         except Exception as e:
@@ -213,7 +219,7 @@ INSTRUCTIONS:
 
     def process_documents(self, relevance_criteria: str, model: str = "gpt-4o-mini", 
                          confidence_threshold: float = 0.7):
-        """Process all PDFs in downloads directory with comprehensive analysis"""
+        """Process all PDFs and output only JSON analysis (no file moving/organizing)"""
         
         pdf_files = list(self.downloads_dir.glob("*.pdf"))
         if not pdf_files:
@@ -234,36 +240,42 @@ INSTRUCTIONS:
         for pdf_file in pdf_files:
             print(f"Processing: {pdf_file.name}")
             
-            # Extract text
-            text = self.extract_pdf_text(pdf_file)
+            # Extract ALL text from PDF (not just first 5 pages)
+            text = self.extract_pdf_text(pdf_file, max_pages=None)  # Get all pages
             if not text:
                 print(f"  ❌ Could not extract text, skipping")
                 continue
             
-            # Get PDF URL from metadata
+            # Get comprehensive metadata
             file_metadata = pdf_metadata.get(pdf_file.name, {})
             pdf_url = file_metadata.get("pdf_url", "Unknown")
             src_page = file_metadata.get("src_page", "Unknown")
+            file_size = file_metadata.get("file_size", 0)
+            page_count = file_metadata.get("page_count", 0)
+            detected_language = file_metadata.get("language", "unknown")
             
             print(f"  📎 PDF URL: {pdf_url}")
+            print(f"  📄 Pages: {page_count}, Size: {file_size} bytes")
             
-            # Comprehensive document analysis
+            # Comprehensive document analysis with ALL text
             analysis = self.analyze_document(text, relevance_criteria, pdf_url, pdf_file.name, model)
             
-            # Decision based on relevance and confidence
+            # Add extra metadata from file system
+            analysis["file_size"] = file_size
+            analysis["page_count"] = page_count
+            analysis["detected_language"] = detected_language
+            analysis["src_page"] = src_page
+            analysis["full_text_available"] = len(text) > 0
+            analysis["text_length"] = len(text)
+            
+            # Count relevant documents
             is_relevant = (analysis["relevant"] and 
                           analysis["confidence"] >= confidence_threshold)
             
             if is_relevant:
-                # Move to relevant folder
-                destination = self.relevant_dir / pdf_file.name
-                pdf_file.rename(destination)
                 relevant_count += 1
                 status = "✅ RELEVANT"
             else:
-                # Move to irrelevant folder  
-                destination = self.irrelevant_dir / pdf_file.name
-                pdf_file.rename(destination)
                 status = "❌ IRRELEVANT"
             
             print(f"  {status}")
@@ -274,14 +286,15 @@ INSTRUCTIONS:
             print(f"  Translated: {analysis.get('translated_flag', False)}")
             print()
             
-            # Add metadata
+            # Add processing metadata (no file moving)
             analysis["filename"] = pdf_file.name
-            analysis["moved_to"] = str(destination)
+            analysis["file_path"] = str(pdf_file)
             analysis["processing_status"] = status
+            analysis["processed_at"] = datetime.now().isoformat()
             
             all_analyses.append(analysis)
         
-        # Save comprehensive results in structured JSON format
+        # Save comprehensive JSON results ONLY
         results_file = self.downloads_dir / "regulatory_analysis.json"
         output_data = {
             "metadata": {
@@ -291,7 +304,8 @@ INSTRUCTIONS:
                 "confidence_threshold": confidence_threshold,
                 "total_documents": len(pdf_files),
                 "relevant_documents": relevant_count,
-                "irrelevant_documents": len(pdf_files) - relevant_count
+                "irrelevant_documents": len(pdf_files) - relevant_count,
+                "processing_mode": "JSON_ONLY"
             },
             "regulations": all_analyses
         }
@@ -299,7 +313,7 @@ INSTRUCTIONS:
         with open(results_file, 'w', encoding='utf-8') as f:
             json.dump(output_data, f, indent=2, ensure_ascii=False)
         
-        # Also save just the relevant regulations in a separate file
+        # Save just relevant regulations
         relevant_regulations = [doc for doc in all_analyses if doc["relevant"]]
         if relevant_regulations:
             relevant_file = self.downloads_dir / "relevant_regulations.json"
@@ -309,13 +323,11 @@ INSTRUCTIONS:
                     "regulations": relevant_regulations
                 }, f, indent=2, ensure_ascii=False)
         
-        print(f"✅ Processing complete!")
+        print(f"✅ JSON-only processing complete!")
         print(f"📊 Results: {relevant_count}/{len(pdf_files)} documents marked as relevant")
-        print(f"📁 Relevant documents: {self.relevant_dir}")
-        print(f"📁 Irrelevant documents: {self.irrelevant_dir}")
-        print(f"📄 Full analysis saved to: {results_file}")
-        if relevant_regulations:
-            print(f"📄 Relevant regulations only: {relevant_file}")
+        print(f"📄 Complete analysis: {results_file}")
+        print(f"📄 Relevant only: {relevant_file}")
+        print(f"💾 PDF files remain unchanged in downloads/")
 
 
 def main():

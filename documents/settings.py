@@ -18,8 +18,8 @@ AUTOTHROTTLE_TARGET_CONCURRENCY = 8.0
 FILES_STORE = "downloads"          # PDFs land here
 ROBOTSTXT_OBEY = True
 
-# -- JSON-only pipeline: In-memory analysis, no PDF storage --------------
+# -- Standard pipeline: Download PDFs + save metadata --------------------
 ITEM_PIPELINES = {
-    "documents.pipelines.SmartDownloadPipeline": 400,      # Download, analyze, save JSON only
-    # FilesPipeline disabled - no PDF files saved to disk
+    "scrapy.pipelines.files.FilesPipeline": 400,           # Download PDFs
+    "documents.pipelines.MetaPipeline": 500,               # Save metadata with URLs
 }

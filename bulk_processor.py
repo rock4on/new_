@@ -100,28 +100,26 @@ class BulkProcessor:
             print(f"❌ Error running scrapy for {url}: {e}")
             return False
     
-    def get_realtime_results(self):
-        """Get results from real-time LLM processing"""
-        print("📊 Collecting real-time analysis results...")
+    def run_llm_processing(self):
+        """Run LLM processing on downloaded PDFs"""
+        print("🤖 Running LLM analysis on downloaded PDFs...")
         
         try:
-            results_file = self.downloads_dir / "live_regulatory_analysis.json"
-            if results_file.exists():
-                with open(results_file, 'r', encoding='utf-8') as f:
-                    analysis_data = json.load(f)
-                
-                relevant_count = analysis_data.get("metadata", {}).get("total_relevant_documents", 0)
-                total_processed = analysis_data.get("metadata", {}).get("total_processed", 0)
-                
-                print(f"✅ Real-time analysis complete: {relevant_count} relevant docs out of {total_processed} processed")
-                return relevant_count, total_processed, analysis_data
-            else:
-                print("⚠️ No real-time analysis results found")
-                return 0, 0, None
-                
+            # Run the process_with_llm script
+            cmd = ["python3", "process_with_llm.py"]
+            result = subprocess.run(cmd, capture_output=True, text=True, cwd=self.base_dir)
+            
+            if result.returncode != 0:
+                print(f"❌ LLM processing failed")
+                print(f"Error: {result.stderr}")
+                return False
+            
+            print(f"✅ LLM processing completed")
+            return True
+            
         except Exception as e:
-            print(f"❌ Error reading real-time results: {e}")
-            return 0, 0, None
+            print(f"❌ Error running LLM processing: {e}")
+            return False
     
     def organize_results(self, url):
         """Organize results for current URL"""
@@ -257,19 +255,18 @@ class BulkProcessor:
                     print("🧹 Cleaning downloads directory...")
                     self.clean_downloads()
                 
-                # Step 1: Run scrapy spider (with real-time LLM processing)
+                # Step 1: Run scrapy spider to download PDFs and metadata
                 if not self.run_scrapy_spider(url):
                     self.failed_urls.append(url)
                     continue
                 
-                # Step 2: Get real-time analysis results
-                relevant_count, total_count, analysis_data = self.get_realtime_results()
-                if analysis_data is None:
+                # Step 2: Run LLM processing on downloaded PDFs
+                if not self.run_llm_processing():
                     self.failed_urls.append(url)
                     continue
                 
                 # Step 3: Organize results
-                relevant_count, total_count = self.organize_results_new(url, analysis_data)
+                relevant_count, total_count = self.organize_results(url)
                 
                 self.processed_urls.append({
                     "url": url,
