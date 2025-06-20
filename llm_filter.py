@@ -18,12 +18,41 @@ from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.pydantic_v1 import BaseModel, Field
 
 
-class RelevanceAnalysis(BaseModel):
-    """Pydantic model for structured relevance analysis output"""
+class DocumentAnalysis(BaseModel):
+    """Pydantic model for comprehensive document analysis and extraction"""
     relevant: bool = Field(description="Whether the document is relevant")
     confidence: float = Field(description="Confidence score between 0.0 and 1.0")
-    reasoning: str = Field(description="Brief explanation of the decision")
-    key_topics: List[str] = Field(description="Main topics found in the document")
+    
+    # Core regulation information
+    unique_id: str = Field(description="Unique identifier for the regulation")
+    country: str = Field(description="Country where regulation applies")
+    jurisdiction: str = Field(description="Specific jurisdiction (state, province, etc.)")
+    issuing_body: str = Field(description="Authority or body that issued the regulation")
+    tag: str = Field(description="Disclosure area/category (e.g., ESG, Financial, Tax)")
+    regulation_name: str = Field(description="Official name of the regulation")
+    publication_date: str = Field(description="Date of publication (YYYY-MM-DD format)")
+    regulation_status: str = Field(description="Status (Draft, Final, Effective, Superseded)")
+    
+    # Content and applicability
+    summary: str = Field(description="Summary of regulation and disclosure requirements")
+    applicability: str = Field(description="Scope summary - who/what it applies to")
+    scoping_threshold: str = Field(description="Minimum thresholds for applicability")
+    effective_date: str = Field(description="Earliest mandatory reporting effective date (YYYY-MM-DD)")
+    timeline_details: str = Field(description="Implementation timeline and key dates")
+    
+    # Reporting requirements
+    financial_integration: str = Field(description="Integration with financial reporting (Yes/No/Partial)")
+    filing_mechanism: str = Field(description="How/where to file reports")
+    reporting_frequency: str = Field(description="Required reporting frequency")
+    assurance_requirement: str = Field(description="Assurance/audit requirements")
+    penalties: str = Field(description="Non-compliance penalties")
+    
+    # Metadata
+    full_text_link: str = Field(description="Link to the full regulation text")
+    translated_flag: bool = Field(description="Whether document was translated to English")
+    source_url: str = Field(description="URL where document was scraped from")
+    last_scraped: str = Field(description="Date when document was scraped (YYYY-MM-DD)")
+    change_detected: bool = Field(description="Whether changes were detected from previous version")
 
 
 # Configuration - Set your preferences here
@@ -56,19 +85,31 @@ class DocumentProcessor:
         )
         
         # Setup output parser
-        self.parser = JsonOutputParser(pydantic_object=RelevanceAnalysis)
+        self.parser = JsonOutputParser(pydantic_object=DocumentAnalysis)
         
         # Create prompt template
         self.prompt = ChatPromptTemplate.from_template("""
-You are a document relevance analyzer. Analyze the following document excerpt and determine if it's relevant to the given criteria.
+You are an expert regulatory document analyzer. Analyze the following document and extract comprehensive regulatory information.
 
-RELEVANCE CRITERIA:
+ANALYSIS CRITERIA:
 {criteria}
 
-DOCUMENT EXCERPT:
+DOCUMENT TEXT:
 {document_text}
 
-Based on the criteria, analyze this document's relevance.
+SOURCE URL: {source_url}
+DOCUMENT FILENAME: {filename}
+
+INSTRUCTIONS:
+1. First determine if this document is relevant to the criteria (regulatory/compliance/legal documents)
+2. If relevant, extract ALL available regulatory information
+3. If the document is not in English, translate all extracted information to English
+4. Use "Unknown" or "Not specified" for fields that cannot be determined from the document
+5. For dates, use YYYY-MM-DD format or "Unknown" if not available
+6. Generate a unique ID using format: COUNTRY_AUTHORITY_YEAR_SHORTNAME
+7. Set translated_flag to true if you translated any content
+8. Set change_detected to false (this is for tracking document changes over time)
+9. Use today's date for last_scraped field
 
 {format_instructions}
 """)
@@ -92,56 +133,101 @@ Based on the criteria, analyze this document's relevance.
             print(f"Error extracting text from {pdf_path}: {e}")
             return ""
     
-    def check_relevance(self, document_text: str, relevance_criteria: str, model: str = "gpt-4o-mini") -> Dict[str, Any]:
-        """Use LangChain LLM to determine if document is relevant"""
+    def analyze_document(self, document_text: str, relevance_criteria: str, source_url: str, filename: str, model: str = "gpt-4o-mini") -> Dict[str, Any]:
+        """Use LangChain LLM to comprehensively analyze regulatory document"""
         
-        # Truncate text if too long (keep first 4000 chars for context)
-        if len(document_text) > 4000:
-            document_text = document_text[:4000] + "...[truncated]"
+        # Truncate text if too long (keep first 8000 chars for better extraction)
+        if len(document_text) > 8000:
+            document_text = document_text[:8000] + "...[truncated]"
         
         # Update model if different from default
         if model != "gpt-4o-mini":
             self.llm.model_name = model
         
         try:
-            # Invoke the chain with the document text and criteria
+            # Get current date for metadata
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            
+            # Invoke the chain with comprehensive parameters
             result = self.chain.invoke({
                 "criteria": relevance_criteria,
                 "document_text": document_text,
+                "source_url": source_url,
+                "filename": filename,
                 "format_instructions": self.parser.get_format_instructions()
             })
             
-            # Convert to dict format expected by the rest of the code
-            return {
-                "relevant": result["relevant"],
-                "confidence": result["confidence"], 
-                "reasoning": result["reasoning"],
-                "key_topics": result["key_topics"]
-            }
+            # Ensure metadata fields are populated
+            if not result.get("last_scraped"):
+                result["last_scraped"] = current_date
+            if not result.get("source_url"):
+                result["source_url"] = source_url
+            if result.get("change_detected") is None:
+                result["change_detected"] = False
+            
+            return result
             
         except Exception as e:
-            print(f"Error analyzing document relevance: {e}")
+            print(f"Error analyzing document: {e}")
+            current_date = datetime.now().strftime("%Y-%m-%d")
             return {
                 "relevant": False,
                 "confidence": 0.0,
-                "reasoning": f"Error in analysis: {str(e)}",
-                "key_topics": []
+                "unique_id": f"ERROR_{current_date}_{hash(filename) % 10000}",
+                "country": "Unknown",
+                "jurisdiction": "Unknown", 
+                "issuing_body": "Unknown",
+                "tag": "Error",
+                "regulation_name": "Analysis Failed",
+                "publication_date": "Unknown",
+                "regulation_status": "Unknown",
+                "summary": f"Error in analysis: {str(e)}",
+                "applicability": "Unknown",
+                "scoping_threshold": "Unknown",
+                "effective_date": "Unknown",
+                "timeline_details": "Unknown",
+                "financial_integration": "Unknown",
+                "filing_mechanism": "Unknown",
+                "reporting_frequency": "Unknown",
+                "assurance_requirement": "Unknown",
+                "penalties": "Unknown",
+                "full_text_link": source_url,
+                "translated_flag": False,
+                "source_url": source_url,
+                "last_scraped": current_date,
+                "change_detected": False
             }
     
+    def load_pdf_metadata(self):
+        """Load PDF metadata from Scrapy output."""
+        metadata_file = self.downloads_dir / "pdf_metadata.json"
+        if metadata_file.exists():
+            try:
+                with open(metadata_file, 'r', encoding='utf-8') as f:
+                    metadata_list = json.load(f)
+                # Create filename to metadata mapping
+                return {item["filename"]: item for item in metadata_list}
+            except Exception as e:
+                print(f"Warning: Could not load PDF metadata: {e}")
+        return {}
+
     def process_documents(self, relevance_criteria: str, model: str = "gpt-4o-mini", 
                          confidence_threshold: float = 0.7):
-        """Process all PDFs in downloads directory"""
+        """Process all PDFs in downloads directory with comprehensive analysis"""
         
         pdf_files = list(self.downloads_dir.glob("*.pdf"))
         if not pdf_files:
             print("No PDF files found in downloads directory")
             return
         
-        results = []
+        # Load metadata mapping
+        pdf_metadata = self.load_pdf_metadata()
+        
+        all_analyses = []
         relevant_count = 0
         
         print(f"Processing {len(pdf_files)} documents...")
-        print(f"Relevance criteria: {relevance_criteria}")
+        print(f"Analysis criteria: {relevance_criteria}")
         print(f"Confidence threshold: {confidence_threshold}")
         print("-" * 80)
         
@@ -151,12 +237,18 @@ Based on the criteria, analyze this document's relevance.
             # Extract text
             text = self.extract_pdf_text(pdf_file)
             if not text:
-                print(f"  ❌ Could not extract text, moving to irrelevant")
-                pdf_file.rename(self.irrelevant_dir / pdf_file.name)
+                print(f"  ❌ Could not extract text, skipping")
                 continue
             
-            # Check relevance
-            analysis = self.check_relevance(text, relevance_criteria, model)
+            # Get PDF URL from metadata
+            file_metadata = pdf_metadata.get(pdf_file.name, {})
+            pdf_url = file_metadata.get("pdf_url", "Unknown")
+            src_page = file_metadata.get("src_page", "Unknown")
+            
+            print(f"  📎 PDF URL: {pdf_url}")
+            
+            # Comprehensive document analysis
+            analysis = self.analyze_document(text, relevance_criteria, pdf_url, pdf_file.name, model)
             
             # Decision based on relevance and confidence
             is_relevant = (analysis["relevant"] and 
@@ -176,35 +268,54 @@ Based on the criteria, analyze this document's relevance.
             
             print(f"  {status}")
             print(f"  Confidence: {analysis['confidence']:.2f}")
-            print(f"  Reasoning: {analysis['reasoning']}")
-            print(f"  Topics: {', '.join(analysis['key_topics'])}")
+            print(f"  Regulation: {analysis.get('regulation_name', 'Unknown')}")
+            print(f"  Country: {analysis.get('country', 'Unknown')}")
+            print(f"  Authority: {analysis.get('issuing_body', 'Unknown')}")
+            print(f"  Translated: {analysis.get('translated_flag', False)}")
             print()
             
-            # Store results
-            results.append({
-                "filename": pdf_file.name,
-                "relevant": is_relevant,
-                "analysis": analysis,
-                "moved_to": str(destination)
-            })
+            # Add metadata
+            analysis["filename"] = pdf_file.name
+            analysis["moved_to"] = str(destination)
+            analysis["processing_status"] = status
+            
+            all_analyses.append(analysis)
         
-        # Save results
-        results_file = self.downloads_dir / "relevance_analysis.json"
-        with open(results_file, 'w') as f:
-            json.dump({
+        # Save comprehensive results in structured JSON format
+        results_file = self.downloads_dir / "regulatory_analysis.json"
+        output_data = {
+            "metadata": {
+                "analysis_date": datetime.now().isoformat(),
                 "criteria": relevance_criteria,
                 "model": model,
                 "confidence_threshold": confidence_threshold,
                 "total_documents": len(pdf_files),
                 "relevant_documents": relevant_count,
-                "results": results
-            }, f, indent=2)
+                "irrelevant_documents": len(pdf_files) - relevant_count
+            },
+            "regulations": all_analyses
+        }
+        
+        with open(results_file, 'w', encoding='utf-8') as f:
+            json.dump(output_data, f, indent=2, ensure_ascii=False)
+        
+        # Also save just the relevant regulations in a separate file
+        relevant_regulations = [doc for doc in all_analyses if doc["relevant"]]
+        if relevant_regulations:
+            relevant_file = self.downloads_dir / "relevant_regulations.json"
+            with open(relevant_file, 'w', encoding='utf-8') as f:
+                json.dump({
+                    "metadata": output_data["metadata"],
+                    "regulations": relevant_regulations
+                }, f, indent=2, ensure_ascii=False)
         
         print(f"✅ Processing complete!")
         print(f"📊 Results: {relevant_count}/{len(pdf_files)} documents marked as relevant")
         print(f"📁 Relevant documents: {self.relevant_dir}")
         print(f"📁 Irrelevant documents: {self.irrelevant_dir}")
         print(f"📄 Full analysis saved to: {results_file}")
+        if relevant_regulations:
+            print(f"📄 Relevant regulations only: {relevant_file}")
 
 
 def main():

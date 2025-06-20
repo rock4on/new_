@@ -6,7 +6,41 @@ PDF_RE = re.compile(r"\.pdf$", re.I)
 
 class DocSpider(scrapy.Spider):
     name = "docs"
-    custom_settings = {"FILES_STORE": "downloads"}
+    custom_settings = {
+        "FILES_STORE": "downloads",
+        
+        # Anti-loop and duplicate prevention
+        "DUPEFILTER_DEBUG": True,           # Log duplicate requests
+        "DEPTH_LIMIT": 10,                  # Limit crawl depth
+        "DEPTH_PRIORITY": 1,                # Prioritize shallow pages
+        
+        # Request limits and timeouts
+        "CLOSESPIDER_ITEMCOUNT": 1000,      # Stop after 1000 items
+        "CLOSESPIDER_PAGECOUNT": 5000,      # Stop after 5000 pages
+        "CLOSESPIDER_TIMEOUT": 3600,        # Stop after 1 hour
+        "DOWNLOAD_TIMEOUT": 30,             # 30s timeout per request
+        
+        # URL filtering
+        "URLLENGTH_LIMIT": 2083,            # Skip very long URLs
+        "HTTPERROR_ALLOWED_CODES": [404],   # Handle 404s gracefully
+        
+        # Content filtering
+        "DOWNLOAD_MAXSIZE": 50 * 1024 * 1024,  # 50MB max file size
+        "DOWNLOAD_WARNSIZE": 10 * 1024 * 1024,  # Warn at 10MB
+        
+        # Politeness and rate limiting
+        "DOWNLOAD_DELAY": 1,                # 1 second between requests
+        "RANDOMIZE_DOWNLOAD_DELAY": 0.5,    # Randomize delay ±50%
+        "AUTOTHROTTLE_ENABLED": True,       # Auto-adjust delays
+        "AUTOTHROTTLE_START_DELAY": 1,      # Start with 1s delay
+        "AUTOTHROTTLE_MAX_DELAY": 10,       # Max 10s delay
+        "AUTOTHROTTLE_TARGET_CONCURRENCY": 2.0,  # Target 2 concurrent requests
+        
+        # Memory management
+        "MEMUSAGE_ENABLED": True,           # Monitor memory usage
+        "MEMUSAGE_LIMIT_MB": 500,           # Stop if using >500MB
+        "MEMUSAGE_WARNING_MB": 300,         # Warn at 300MB
+    }
 
     def __init__(self, start_url: str, *args, **kw):
         super().__init__(*args, **kw)
@@ -23,8 +57,8 @@ class DocSpider(scrapy.Spider):
                     yield DocItem(
                         file_urls=[url],
                         src_page=response.url,
-                        title=href,  # Store original link text
-                        url=url      # Store the actual URL
+                        title=href,     # Store original link text
+                        pdf_url=url     # Store PDF URL for LLM
                     )
                 else:
                     yield response.follow(url, self.parse)
