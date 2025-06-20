@@ -52,10 +52,16 @@ class DocSpider(scrapy.Spider):
 
     def parse(self, response):
         # Download all PDFs found
+        pdf_count = 0
+        link_count = 0
+        
         for href in response.css("a::attr(href)").getall():
+            link_count += 1
             url = response.urljoin(href.strip())
             if self.allowed_domains[0] in url:
                 if PDF_RE.search(url):
+                    pdf_count += 1
+                    self.logger.info(f"📄 Found PDF #{pdf_count}: {url}")
                     yield DocItem(
                         file_urls=[url],
                         src_page=response.url,
@@ -64,3 +70,5 @@ class DocSpider(scrapy.Spider):
                     )
                 else:
                     yield response.follow(url, self.parse)
+        
+        self.logger.info(f"📊 Page {response.url}: Found {pdf_count} PDFs out of {link_count} links")

@@ -24,6 +24,11 @@ class MetaPipeline:
 
     def process_item(self, item, spider):
         ad = ItemAdapter(item)
+        
+        # Debug: Log what we're receiving
+        spider.logger.info(f"🔍 Processing item with files: {ad.get('files', [])}")
+        spider.logger.info(f"🔍 PDF URL: {ad.get('pdf_url', 'Missing')}")
+        spider.logger.info(f"🔍 Source page: {ad.get('src_page', 'Missing')}")
 
         # Extract PDF stats and URL mapping
         for f in ad.get("files", []):

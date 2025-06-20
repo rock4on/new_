@@ -217,6 +217,22 @@ INSTRUCTIONS:
                 print(f"Warning: Could not load PDF metadata: {e}")
         return {}
 
+    def save_individual_json(self, analysis: Dict[str, Any], pdf_filename: str):
+        """Save individual JSON file for each processed PDF"""
+        # Create individual JSON files directory
+        json_dir = self.downloads_dir / "individual_json"
+        json_dir.mkdir(exist_ok=True)
+        
+        # Create filename for JSON (replace .pdf with .json)
+        json_filename = pdf_filename.replace('.pdf', '.json')
+        json_path = json_dir / json_filename
+        
+        # Save individual analysis
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(analysis, f, indent=2, ensure_ascii=False)
+        
+        print(f"  💾 Saved individual JSON: {json_path}")
+
     def process_documents(self, relevance_criteria: str, model: str = "gpt-4o-mini", 
                          confidence_threshold: float = 0.7):
         """Process all PDFs and output only JSON analysis (no file moving/organizing)"""
@@ -293,6 +309,9 @@ INSTRUCTIONS:
             analysis["processed_at"] = datetime.now().isoformat()
             
             all_analyses.append(analysis)
+            
+            # Save individual JSON file for this PDF
+            self.save_individual_json(analysis, pdf_file.name)
         
         # Save comprehensive JSON results ONLY
         results_file = self.downloads_dir / "regulatory_analysis.json"
@@ -327,6 +346,7 @@ INSTRUCTIONS:
         print(f"📊 Results: {relevant_count}/{len(pdf_files)} documents marked as relevant")
         print(f"📄 Complete analysis: {results_file}")
         print(f"📄 Relevant only: {relevant_file}")
+        print(f"📁 Individual JSON files: {self.downloads_dir}/individual_json/")
         print(f"💾 PDF files remain unchanged in downloads/")
 
 
