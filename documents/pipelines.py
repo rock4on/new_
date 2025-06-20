@@ -105,8 +105,8 @@ class DocumentAnalysis(BaseModel):
     change_detected: bool = Field(description="Whether changes were detected from previous version")
 
 
-class LLMFilterPipeline:
-    """Real-time LLM processing pipeline - analyzes PDFs during crawling"""
+class SmartDownloadPipeline:
+    """Downloads PDFs, analyzes them, and only saves relevant ones"""
     
     def __init__(self):
         # Configuration
@@ -114,7 +114,8 @@ class LLMFilterPipeline:
         self.base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
         self.model = "gpt-4o-mini"
         self.confidence_threshold = 0.7
-        self.criteria = "regulatory, compliance, and legal documents related to financial reporting and disclosure requirements"
+        # Change this to your specific search criteria
+        self.criteria = os.getenv("LLM_CRITERIA", "regulatory, compliance, and legal documents related to financial reporting and disclosure requirements")
         
         # LLM setup
         self.llm = ChatOpenAI(
@@ -239,71 +240,71 @@ INSTRUCTIONS:
             }
     
     def process_item(self, item, spider):
-        """Process PDF items in real-time"""
+        """Download PDFs in memory, analyze, and save only JSON data (no PDF files)"""
         adapter = ItemAdapter(item)
-        files = adapter.get('files', [])
+        file_urls = adapter.get('file_urls', [])
         
-        if not files:
+        if not file_urls:
             return item
-            
-        # Process each downloaded file
-        for file_info in files:
-            file_path = Path(spider.settings["FILES_STORE"]) / file_info["path"]
-            
-            if file_path.suffix.lower() == ".pdf":
+        
+        # Process each PDF URL
+        for pdf_url in file_urls:
+            try:
+                spider.logger.info(f"📥 Analyzing: {pdf_url}")
+                
+                # Download PDF content in memory only
+                import requests
+                response = requests.get(pdf_url, timeout=30)
+                response.raise_for_status()
+                
+                pdf_content = response.content
+                filename = pdf_url.split('/')[-1]
+                if not filename.endswith('.pdf'):
+                    filename += '.pdf'
+                
+                # Extract text from downloaded content (in memory)
+                text = self.extract_pdf_text(pdf_content, filename)
+                if not text:
+                    spider.logger.warning(f"Could not extract text from {filename}")
+                    continue
+                
+                # Run async LLM analysis
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                
                 try:
-                    # Read PDF content
-                    with open(file_path, 'rb') as f:
-                        file_content = f.read()
+                    analysis = loop.run_until_complete(
+                        self.analyze_document_async(text, pdf_url, filename)
+                    )
+                finally:
+                    loop.close()
+                
+                # Decision based on relevance and confidence
+                is_relevant = (analysis["relevant"] and 
+                             analysis["confidence"] >= self.confidence_threshold)
+                
+                if is_relevant:
+                    spider.logger.info(f"✅ RELEVANT (JSON only): {filename} - {analysis.get('regulation_name', 'Unknown')}")
                     
-                    # Extract text
-                    text = self.extract_pdf_text(file_content, file_path.name)
-                    if not text:
-                        spider.logger.warning(f"Could not extract text from {file_path.name}")
-                        continue
+                    # Add to regulatory data (NO PDF file saved)
+                    analysis["filename"] = filename
+                    analysis["pdf_url"] = pdf_url
+                    self.regulatory_data.append(analysis)
                     
-                    # Get metadata
-                    pdf_url = adapter.get("pdf_url", "Unknown")
+                    # Save JSON results immediately
+                    self.save_regulatory_data(spider)
                     
-                    # Run async LLM analysis
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    
-                    try:
-                        analysis = loop.run_until_complete(
-                            self.analyze_document_async(text, pdf_url, file_path.name)
-                        )
-                    finally:
-                        loop.close()
-                    
-                    # Decision based on relevance and confidence
-                    is_relevant = (analysis["relevant"] and 
-                                 analysis["confidence"] >= self.confidence_threshold)
-                    
-                    if is_relevant:
-                        # Keep the PDF file
-                        spider.logger.info(f"✅ RELEVANT: {file_path.name} - {analysis.get('regulation_name', 'Unknown')}")
-                        
-                        # Add to regulatory data
-                        analysis["filename"] = file_path.name
-                        analysis["file_path"] = str(file_path)
-                        self.regulatory_data.append(analysis)
-                        
-                        # Save relevant regulation immediately to JSON
-                        self.save_regulatory_data(spider)
-                        
-                    else:
-                        # Remove irrelevant PDF
-                        spider.logger.info(f"❌ IRRELEVANT: {file_path.name} - Confidence: {analysis['confidence']:.2f}")
-                        try:
-                            file_path.unlink()  # Delete the file
-                        except Exception as e:
-                            spider.logger.error(f"Could not delete {file_path}: {e}")
-                    
-                    self.processed_count += 1
-                    
-                except Exception as e:
-                    spider.logger.error(f"Error processing {file_path}: {e}")
+                else:
+                    spider.logger.info(f"❌ IRRELEVANT (skipped): {filename} - Confidence: {analysis['confidence']:.2f}")
+                
+                self.processed_count += 1
+                
+            except Exception as e:
+                spider.logger.error(f"Error processing {pdf_url}: {e}")
+        
+        # Clear files to prevent FilesPipeline from saving anything
+        adapter['file_urls'] = []
+        adapter['files'] = []
         
         return item
     

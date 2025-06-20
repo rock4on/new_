@@ -18,9 +18,8 @@ AUTOTHROTTLE_TARGET_CONCURRENCY = 8.0
 FILES_STORE = "downloads"          # PDFs land here
 ROBOTSTXT_OBEY = True
 
-# -- Pipeline order: Download → LLM Analysis → Metadata ------------------
+# -- JSON-only pipeline: In-memory analysis, no PDF storage --------------
 ITEM_PIPELINES = {
-    "scrapy.pipelines.files.FilesPipeline": 400,           # Download PDFs first
-    "documents.pipelines.LLMFilterPipeline": 450,          # Real-time LLM analysis & filtering
-    "documents.pipelines.MetaPipeline": 500,               # Metadata for remaining files
+    "documents.pipelines.SmartDownloadPipeline": 400,      # Download, analyze, save JSON only
+    # FilesPipeline disabled - no PDF files saved to disk
 }

@@ -9,4 +9,4 @@ langchain-openai
 langchain-core
 PyPDF2
 aiohttp
-asyncio
+requests
