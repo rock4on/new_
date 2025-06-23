@@ -2,10 +2,10 @@ BOT_NAME = "documents"
 SPIDER_MODULES = ["documents.spiders"]
 NEWSPIDER_MODULE = "documents.spiders"
 
-# -- High-performance global settings -------------------------------------
-CONCURRENT_REQUESTS = 32           # Total concurrent requests
-CONCURRENT_REQUESTS_PER_DOMAIN = 16  # Per domain concurrency
-DOWNLOAD_DELAY = 0.5               # Reduced delay
+# -- Conservative settings for government sites ---------------------------
+CONCURRENT_REQUESTS = 1            # Single request at a time
+CONCURRENT_REQUESTS_PER_DOMAIN = 1  # One request per domain
+DOWNLOAD_DELAY = 10                # 10 second delay between requests
 RANDOMIZE_DOWNLOAD_DELAY = 0.5     # Randomize delay ±50%
 
 # Auto-throttling for dynamic adjustment

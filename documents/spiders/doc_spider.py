@@ -62,28 +62,53 @@ class DocSpider(scrapy.Spider):
         self.pdf_metadata = []
         # FlareSolverr endpoint
         self.flaresolverr_url = "http://localhost:8191/v1"
+        
+        # Rotating User Agents for Philippines government sites
+        self.user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15"
+        ]
+        import random
+        self.current_ua = random.choice(self.user_agents)
 
     def solve_cloudflare(self, url):
-        """Use FlareSolverr to bypass Cloudflare protection"""
+        """Use FlareSolverr to bypass protection with enhanced stealth"""
+        import random
+        import time
+        
+        # Add random delay to seem more human
+        time.sleep(random.uniform(2, 5))
+        
+        # Rotate user agent
+        self.current_ua = random.choice(self.user_agents)
+        
         payload = {
             "cmd": "request.get",
             "url": url,
-            "maxTimeout": 90000,  # 90 seconds timeout for government sites
+            "maxTimeout": 120000,  # 2 minutes timeout
             "headers": {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-                "Accept-Language": "en-US,en;q=0.9,tl;q=0.8",
+                "User-Agent": self.current_ua,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9,tl;q=0.8,fil;q=0.7",
                 "Accept-Encoding": "gzip, deflate, br",
-                "DNT": "1",
+                "Cache-Control": "no-cache",
+                "Pragma": "no-cache",
                 "Connection": "keep-alive",
                 "Upgrade-Insecure-Requests": "1",
                 "Sec-Fetch-Dest": "document",
                 "Sec-Fetch-Mode": "navigate",
-                "Sec-Fetch-Site": "none",
-                "Sec-Fetch-User": "?1"
+                "Sec-Fetch-Site": "cross-site",
+                "Sec-Fetch-User": "?1",
+                "Referer": "https://www.google.com.ph/"
             },
-            "session": "sec_gov_ph_session",  # Use persistent session
-            "returnOnlyCookies": False
+            "session": f"sec_gov_ph_session_{random.randint(1000, 9999)}",
+            "returnOnlyCookies": False,
+            "proxy": {
+                "url": ""  # You might need a Philippines proxy
+            }
         }
         
         try:
