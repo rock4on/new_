@@ -69,18 +69,68 @@ class DocSpider(scrapy.Spider):
                 meta={
                     "playwright": True,
                     "playwright_page_methods": [
-                        # Remove automation indicators
-                        PageMethod("evaluate", "() => { Object.defineProperty(navigator, 'webdriver', {get: () => undefined}) }"),
-                        PageMethod("evaluate", "() => { window.chrome = { runtime: {} } }"),
-                        PageMethod("evaluate", "() => { Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]}) }"),
-                        PageMethod("evaluate", "() => { Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']}) }"),
+                        # Comprehensive stealth measures
+                        PageMethod("evaluate", """() => {
+                            // Remove webdriver property
+                            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                            
+                            // Add chrome runtime
+                            window.chrome = { runtime: {} };
+                            
+                            // Mock plugins
+                            Object.defineProperty(navigator, 'plugins', {
+                                get: () => [1, 2, 3, 4, 5]
+                            });
+                            
+                            // Mock languages
+                            Object.defineProperty(navigator, 'languages', {
+                                get: () => ['en-US', 'en']
+                            });
+                            
+                            // Mock permissions
+                            const originalQuery = window.navigator.permissions.query;
+                            window.navigator.permissions.query = (parameters) => (
+                                parameters.name === 'notifications' ?
+                                Promise.resolve({ state: Notification.permission }) :
+                                originalQuery(parameters)
+                            );
+                            
+                            // Mock WebGL
+                            const getParameter = WebGLRenderingContext.getParameter;
+                            WebGLRenderingContext.prototype.getParameter = function(parameter) {
+                                if (parameter === 37445) {
+                                    return 'Intel Inc.';
+                                }
+                                if (parameter === 37446) {
+                                    return 'Intel Iris OpenGL Engine';
+                                }
+                                return getParameter(parameter);
+                            };
+                            
+                            // Mock device memory
+                            Object.defineProperty(navigator, 'deviceMemory', {
+                                get: () => 8
+                            });
+                            
+                            // Mock hardware concurrency
+                            Object.defineProperty(navigator, 'hardwareConcurrency', {
+                                get: () => 4
+                            });
+                        }"""),
                         # Wait for page load
                         PageMethod("wait_for_load_state", "domcontentloaded"),
-                        PageMethod("wait_for_timeout", 5000),  # Initial wait
-                        # Wait for Cloudflare to complete (if present)
-                        PageMethod("wait_for_timeout", 20000),  # Give Cloudflare time to process
+                        PageMethod("wait_for_timeout", 3000),  # Initial wait
+                        
+                        # Human-like interactions
+                        PageMethod("evaluate", "() => { window.scrollTo(0, 100); }"),  # Small scroll
+                        PageMethod("wait_for_timeout", 2000),
+                        PageMethod("evaluate", "() => { window.scrollTo(0, 0); }"),    # Back to top
+                        PageMethod("wait_for_timeout", 1000),
+                        
+                        # Wait for Cloudflare to complete
+                        PageMethod("wait_for_timeout", 25000),  # Extended Cloudflare wait
                         PageMethod("wait_for_selector", "body", timeout=120000),  # 120 second timeout
-                        PageMethod("wait_for_timeout", 10000),  # Final wait to ensure page is stable
+                        PageMethod("wait_for_timeout", 5000),  # Final stability wait
                     ],
                     "playwright_include_page": True,
                 },
