@@ -312,7 +312,7 @@ class DocSpider(scrapy.Spider):
         self.logger.info(f"📊 Page {response.url}: Found {pdf_count} PDFs out of {link_count} links")
     
     def create_pdf_item(self, pdf_url, src_page, title):
-        """Create a PDF item for download"""
+        """Create a PDF item and download via FlareSolverr"""
         # Generate filename using same logic as FilesPipeline
         url_hash = hashlib.sha1(pdf_url.encode()).hexdigest()
         scrapy_filename = f"{url_hash}.pdf"
@@ -327,19 +327,99 @@ class DocSpider(scrapy.Spider):
             "src_page": src_page,
             "title": title,
             "scraped_at": datetime.now().isoformat(),
-            "status": "found"
+            "status": "downloading"
         }
         self.pdf_metadata.append(metadata)
         
         # Save individual metadata file immediately
         self.save_individual_metadata(metadata)
         
+        # Download PDF using FlareSolverr
+        self.download_pdf_with_flaresolverr(pdf_url, metadata)
+        
+        # Also yield DocItem for Scrapy pipeline as backup
         yield DocItem(
             file_urls=[pdf_url],
             src_page=src_page,
-            title=title,     # Store original link text
-            pdf_url=pdf_url  # Store PDF URL for LLM
+            title=title,
+            pdf_url=pdf_url
         )
+    
+    def download_pdf_with_flaresolverr(self, pdf_url, metadata):
+        """Download PDF using FlareSolverr"""
+        self.logger.info(f"📥 Downloading PDF via FlareSolverr: {pdf_url}")
+        
+        try:
+            # Use FlareSolverr to solve the PDF URL
+            solution = self.solve_cloudflare(pdf_url)
+            
+            if solution and solution.get("status_code") == 200:
+                # Get cookies and session from FlareSolverr
+                cookies = solution.get("cookies", [])
+                cookie_dict = {cookie["name"]: cookie["value"] for cookie in cookies}
+                user_agent = solution.get("userAgent", self.current_ua)
+                
+                # Make direct request with solved session
+                import requests
+                pdf_response = requests.get(
+                    pdf_url,
+                    cookies=cookie_dict,
+                    headers={
+                        "User-Agent": user_agent,
+                        "Accept": "application/pdf,application/octet-stream,*/*",
+                        "Referer": metadata.get("src_page", ""),
+                        "Connection": "keep-alive"
+                    },
+                    timeout=120,
+                    stream=True
+                )
+                
+                if pdf_response.status_code == 200:
+                    # Check if it's actually a PDF
+                    content_type = pdf_response.headers.get('content-type', '').lower()
+                    if 'pdf' in content_type or pdf_response.content[:4] == b'%PDF':
+                        
+                        # Save the PDF
+                        downloads_dir = Path(self.settings["FILES_STORE"])
+                        downloads_dir.mkdir(exist_ok=True)
+                        
+                        pdf_filename = metadata["filename"]
+                        pdf_path = downloads_dir / pdf_filename
+                        
+                        with open(pdf_path, 'wb') as f:
+                            for chunk in pdf_response.iter_content(chunk_size=8192):
+                                if chunk:
+                                    f.write(chunk)
+                        
+                        file_size = pdf_path.stat().st_size
+                        self.logger.info(f"✅ PDF downloaded successfully: {pdf_filename} ({file_size} bytes)")
+                        
+                        # Update metadata
+                        metadata["status"] = "downloaded"
+                        metadata["download_size"] = file_size
+                        metadata["downloaded_at"] = datetime.now().isoformat()
+                        metadata["content_type"] = content_type
+                        
+                        # Save updated metadata
+                        self.save_individual_metadata(metadata)
+                        return True
+                    else:
+                        self.logger.warning(f"❌ Response is not a PDF: {content_type}")
+                        metadata["status"] = f"not_pdf_{content_type}"
+                else:
+                    self.logger.error(f"❌ PDF download failed: HTTP {pdf_response.status_code}")
+                    metadata["status"] = f"http_error_{pdf_response.status_code}"
+            else:
+                self.logger.error(f"❌ FlareSolverr failed for PDF: {pdf_url}")
+                metadata["status"] = "flaresolverr_failed"
+                
+        except Exception as e:
+            self.logger.error(f"❌ PDF download error: {e}")
+            metadata["status"] = f"error_{type(e).__name__}"
+        
+        # Save metadata with error status
+        self.save_individual_metadata(metadata)
+        return False
     
     
     def extract_page_content(self, response):
