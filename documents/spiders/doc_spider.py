@@ -401,13 +401,33 @@ class DocSpider(scrapy.Spider):
                     # Check if we have content
                     if response_content and len(response_content) > 1000:
                         try:
-                            # First check if this is HTML (error page) or actual PDF
+                            # Check if this is HTML content instead of PDF
                             if '<html' in response_content.lower() or '<!doctype' in response_content.lower():
-                                self.logger.error(f"❌ Received HTML instead of PDF - likely protected or redirected")
-                                self.logger.error(f"Response preview: {response_content[:500]}...")
-                                metadata["status"] = "received_html_not_pdf"
+                                self.logger.info(f"📄 Received HTML content instead of PDF - saving as HTML")
+                                
+                                # Save as HTML file
+                                downloads_dir = Path(self.settings["FILES_STORE"])
+                                downloads_dir.mkdir(exist_ok=True)
+                                
+                                # Create HTML filename
+                                html_filename = metadata["filename"].replace('.pdf', '.html')
+                                html_path = downloads_dir / html_filename
+                                
+                                with open(html_path, 'w', encoding='utf-8') as f:
+                                    f.write(response_content)
+                                
+                                file_size = html_path.stat().st_size
+                                self.logger.info(f"✅ HTML content saved: {html_filename} ({file_size} bytes)")
+                                
+                                # Update metadata
+                                metadata["status"] = "downloaded_html"
+                                metadata["filename"] = html_filename
+                                metadata["download_size"] = file_size
+                                metadata["downloaded_at"] = datetime.now().isoformat()
+                                metadata["content_type"] = "text/html"
+                                
                                 self.save_individual_metadata(metadata)
-                                return False
+                                return True
                             
                             # Try different methods to get binary content
                             pdf_content = None
@@ -439,7 +459,7 @@ class DocSpider(scrapy.Spider):
                                     pass
                             
                             # Check if we got valid PDF content
-                            if pdf_content and (pdf_content.startswith(b'%PDF') or len(pdf_content) > 10000):
+                            if pdf_content and pdf_content.startswith(b'%PDF'):
                                 # Save the PDF
                                 downloads_dir = Path(self.settings["FILES_STORE"])
                                 downloads_dir.mkdir(exist_ok=True)
@@ -459,6 +479,31 @@ class DocSpider(scrapy.Spider):
                                 metadata["downloaded_at"] = datetime.now().isoformat()
                                 
                                 # Save updated metadata
+                                self.save_individual_metadata(metadata)
+                                return True
+                            elif pdf_content and len(pdf_content) > 1000:
+                                # Save as generic content if it's substantial but not PDF
+                                self.logger.info(f"📄 Received non-PDF content - saving as .txt file")
+                                
+                                downloads_dir = Path(self.settings["FILES_STORE"])
+                                downloads_dir.mkdir(exist_ok=True)
+                                
+                                txt_filename = metadata["filename"].replace('.pdf', '.txt')
+                                txt_path = downloads_dir / txt_filename
+                                
+                                with open(txt_path, 'wb') as f:
+                                    f.write(pdf_content)
+                                
+                                file_size = txt_path.stat().st_size
+                                self.logger.info(f"✅ Content saved as text: {txt_filename} ({file_size} bytes)")
+                                
+                                # Update metadata
+                                metadata["status"] = "downloaded_as_text"
+                                metadata["filename"] = txt_filename
+                                metadata["download_size"] = file_size
+                                metadata["downloaded_at"] = datetime.now().isoformat()
+                                metadata["content_type"] = "text/plain"
+                                
                                 self.save_individual_metadata(metadata)
                                 return True
                             else:
