@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 import hashlib
-from scrapy_playwright.page import PageMethod
+import requests
 
 PDF_RE = re.compile(r"\.pdf$", re.I)
 
@@ -60,94 +60,91 @@ class DocSpider(scrapy.Spider):
         
         # Initialize metadata tracking
         self.pdf_metadata = []
+        # FlareSolverr endpoint
+        self.flaresolverr_url = "http://localhost:8191/v1"
+
+    def solve_cloudflare(self, url):
+        """Use FlareSolverr to bypass Cloudflare protection"""
+        payload = {
+            "cmd": "request.get",
+            "url": url,
+            "maxTimeout": 60000,  # 60 seconds timeout
+            "headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            }
+        }
+        
+        try:
+            response = requests.post(self.flaresolverr_url, json=payload, timeout=70)
+            response.raise_for_status()
+            result = response.json()
+            
+            if result.get("status") == "ok":
+                solution = result.get("solution", {})
+                return {
+                    "url": solution.get("url"),
+                    "html": solution.get("response"),
+                    "cookies": solution.get("cookies", []),
+                    "user_agent": solution.get("userAgent")
+                }
+            else:
+                self.logger.error(f"FlareSolverr failed: {result.get('message', 'Unknown error')}")
+                return None
+                
+        except Exception as e:
+            self.logger.error(f"FlareSolverr request failed: {str(e)}")
+            return None
 
     def start_requests(self):
-        """Generate initial requests with Playwright enabled for Cloudflare bypass"""
+        """Generate initial requests using FlareSolverr for Cloudflare bypass"""
         for url in self.start_urls:
-            yield scrapy.Request(
-                url,
-                meta={
-                    "playwright": True,
-                    "playwright_page_methods": [
-                        # Comprehensive stealth measures
-                        PageMethod("evaluate", """() => {
-                            // Remove webdriver property
-                            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-                            
-                            // Add chrome runtime
-                            window.chrome = { runtime: {} };
-                            
-                            // Mock plugins
-                            Object.defineProperty(navigator, 'plugins', {
-                                get: () => [1, 2, 3, 4, 5]
-                            });
-                            
-                            // Mock languages
-                            Object.defineProperty(navigator, 'languages', {
-                                get: () => ['en-US', 'en']
-                            });
-                            
-                            // Mock permissions
-                            const originalQuery = window.navigator.permissions.query;
-                            window.navigator.permissions.query = (parameters) => (
-                                parameters.name === 'notifications' ?
-                                Promise.resolve({ state: Notification.permission }) :
-                                originalQuery(parameters)
-                            );
-                            
-                            // Mock WebGL
-                            const getParameter = WebGLRenderingContext.getParameter;
-                            WebGLRenderingContext.prototype.getParameter = function(parameter) {
-                                if (parameter === 37445) {
-                                    return 'Intel Inc.';
-                                }
-                                if (parameter === 37446) {
-                                    return 'Intel Iris OpenGL Engine';
-                                }
-                                return getParameter(parameter);
-                            };
-                            
-                            // Mock device memory
-                            Object.defineProperty(navigator, 'deviceMemory', {
-                                get: () => 8
-                            });
-                            
-                            // Mock hardware concurrency
-                            Object.defineProperty(navigator, 'hardwareConcurrency', {
-                                get: () => 4
-                            });
-                        }"""),
-                        # Wait for page load
-                        PageMethod("wait_for_load_state", "domcontentloaded"),
-                        PageMethod("wait_for_timeout", 3000),  # Initial wait
-                        
-                        # Human-like interactions
-                        PageMethod("evaluate", "() => { window.scrollTo(0, 100); }"),  # Small scroll
-                        PageMethod("wait_for_timeout", 2000),
-                        PageMethod("evaluate", "() => { window.scrollTo(0, 0); }"),    # Back to top
-                        PageMethod("wait_for_timeout", 1000),
-                        
-                        # Wait for Cloudflare to complete
-                        PageMethod("wait_for_timeout", 25000),  # Extended Cloudflare wait
-                        PageMethod("wait_for_selector", "body", timeout=120000),  # 120 second timeout
-                        PageMethod("wait_for_timeout", 5000),  # Final stability wait
-                    ],
-                    "playwright_include_page": True,
-                },
-                callback=self.parse,
-            )
+            # Try FlareSolverr first
+            solution = self.solve_cloudflare(url)
+            if solution:
+                # Create a fake response with the solved content
+                yield scrapy.Request(
+                    solution["url"],
+                    meta={
+                        "flaresolverr_solution": solution,
+                        "dont_cache": True
+                    },
+                    callback=self.parse_flaresolverr_response,
+                    dont_filter=True
+                )
+            else:
+                # Fallback to regular request if FlareSolverr fails
+                self.logger.warning(f"FlareSolverr failed for {url}, trying regular request")
+                yield scrapy.Request(url, callback=self.parse)
 
     def is_url_allowed(self, url):
         """Check if URL is within the allowed base URL path"""
         return url.startswith(self.base_url)
 
-    async def parse(self, response):
-        # Clean up Playwright page if it exists
-        if "playwright_page" in response.meta:
-            page = response.meta["playwright_page"]
-            await page.close()  # Important to avoid memory leaks
-            self.logger.info("✅ Successfully bypassed Cloudflare protection")
+    def parse_flaresolverr_response(self, response):
+        """Parse response that was solved by FlareSolverr"""
+        solution = response.meta.get("flaresolverr_solution")
+        if not solution:
+            return
+            
+        self.logger.info("✅ Successfully bypassed Cloudflare with FlareSolverr")
         
+        # Create a mock response with the solved HTML
+        from scrapy.http import HtmlResponse
+        solved_response = HtmlResponse(
+            url=solution["url"],
+            body=solution["html"].encode('utf-8'),
+            encoding='utf-8'
+        )
+        
+        # Process the solved response
+        yield from self.parse_content(solved_response)
+
+    def parse(self, response):
+        """Regular parse method for non-Cloudflare pages"""
+        yield from self.parse_content(response)
+
+    def parse_content(self, response):
+        """Common parsing logic for both FlareSolverr and regular responses"""
         # Extract and save page text content
         page_text = self.extract_page_content(response)
         if page_text and len(page_text.strip()) > 500:  # Only save substantial content
@@ -194,23 +191,21 @@ class DocSpider(scrapy.Spider):
                         pdf_url=url     # Store PDF URL for LLM
                     )
                 else:
-                    # Follow links with Playwright for potential Cloudflare-protected pages
-                    yield scrapy.Request(
-                        url,
-                        meta={
-                            "playwright": True,
-                            "playwright_page_methods": [
-                                # Anti-detection measures
-                                PageMethod("evaluate", "() => { Object.defineProperty(navigator, 'webdriver', {get: () => undefined}) }"),
-                                PageMethod("wait_for_load_state", "domcontentloaded"),
-                                PageMethod("wait_for_timeout", 5000),  # Initial wait
-                                PageMethod("wait_for_timeout", 15000),  # Cloudflare processing time
-                                PageMethod("wait_for_selector", "body", timeout=120000),  # 120 second timeout
-                            ],
-                            "playwright_include_page": True,
-                        },
-                        callback=self.parse,
-                    )
+                    # Follow links - try FlareSolverr for potential Cloudflare pages
+                    solution = self.solve_cloudflare(url)
+                    if solution:
+                        yield scrapy.Request(
+                            solution["url"],
+                            meta={
+                                "flaresolverr_solution": solution,
+                                "dont_cache": True
+                            },
+                            callback=self.parse_flaresolverr_response,
+                            dont_filter=True
+                        )
+                    else:
+                        # Fallback to regular request
+                        yield scrapy.Request(url, callback=self.parse)
         
         self.logger.info(f"📊 Page {response.url}: Found {pdf_count} PDFs out of {link_count} links")
     

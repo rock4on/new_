@@ -18,71 +18,9 @@ AUTOTHROTTLE_TARGET_CONCURRENCY = 8.0
 FILES_STORE = "downloads"          # PDFs land here
 ROBOTSTXT_OBEY = True
 
-# -- Playwright configuration for Cloudflare bypass -------------------
-DOWNLOAD_HANDLERS = {
-    "http": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
-    "https": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
-}
-
-# Set async reactor (required for Playwright)
-TWISTED_REACTOR = "twisted.internet.asyncioreactor.AsyncioSelectorReactor"
-
-# Playwright browser settings
-PLAYWRIGHT_BROWSER_TYPE = "chromium"
-PLAYWRIGHT_DEFAULT_NAVIGATION_TIMEOUT = 120 * 1000  # 120 seconds in milliseconds
-PLAYWRIGHT_LAUNCH_OPTIONS = {
-    "headless": False,
-    "args": [
-        "--no-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-blink-features=AutomationControlled",
-        "--disable-extensions-file-access-check",
-        "--disable-extensions-http-throttling",
-        "--disable-extensions-except",
-        "--disable-background-timer-throttling",
-        "--disable-backgrounding-occluded-windows",
-        "--disable-renderer-backgrounding",
-        "--disable-features=TranslateUI,BlinkGenPropertyTrees",
-        "--disable-ipc-flooding-protection",
-        "--enable-features=NetworkService,NetworkServiceLogging",
-        "--force-color-profile=srgb",
-        "--metrics-recording-only",
-        "--no-first-run",
-        "--no-default-browser-check",
-        "--no-pings",
-        "--password-store=basic",
-        "--use-mock-keychain",
-        "--export-tagged-pdf"
-    ]
-}
-
-# Additional context settings for stealth
-PLAYWRIGHT_CONTEXTS = {
-    "default": {
-        "viewport": {"width": 1366, "height": 768},
-        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "locale": "en-US",
-        "timezone_id": "America/New_York",
-        "permissions": ["geolocation", "notifications"],
-        "geolocation": {"latitude": 40.7128, "longitude": -74.0060},
-        "extra_http_headers": {
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br, zstd",
-            "Cache-Control": "max-age=0",
-            "DNT": "1",
-            "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "none",
-            "Sec-Fetch-User": "?1",
-            "sec-ch-ua": '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
-            "sec-ch-ua-mobile": "?0",
-            "sec-ch-ua-platform": '"Windows"'
-        }
-    }
-}
+# -- FlareSolverr configuration for Cloudflare bypass -------------------
+# FlareSolverr handles Cloudflare challenges via HTTP API
+# No special Scrapy configuration needed - handled in spider logic
 
 # -- Standard pipeline: Download PDFs + save metadata --------------------
 ITEM_PIPELINES = {
