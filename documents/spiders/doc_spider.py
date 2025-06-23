@@ -5,6 +5,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 import hashlib
+from scrapy_playwright.page import PageMethod
 
 PDF_RE = re.compile(r"\.pdf$", re.I)
 
@@ -60,11 +61,33 @@ class DocSpider(scrapy.Spider):
         # Initialize metadata tracking
         self.pdf_metadata = []
 
+    def start_requests(self):
+        """Generate initial requests with Playwright enabled for Cloudflare bypass"""
+        for url in self.start_urls:
+            yield scrapy.Request(
+                url,
+                meta={
+                    "playwright": True,
+                    "playwright_page_methods": [
+                        PageMethod("wait_for_selector", "body", timeout=30000),
+                        PageMethod("wait_for_timeout", 3000),  # Wait for dynamic content
+                    ],
+                    "playwright_include_page": True,
+                },
+                callback=self.parse,
+            )
+
     def is_url_allowed(self, url):
         """Check if URL is within the allowed base URL path"""
         return url.startswith(self.base_url)
 
-    def parse(self, response):
+    async def parse(self, response):
+        # Clean up Playwright page if it exists
+        if "playwright_page" in response.meta:
+            page = response.meta["playwright_page"]
+            await page.close()  # Important to avoid memory leaks
+            self.logger.info("✅ Successfully bypassed Cloudflare protection")
+        
         # Extract and save page text content
         page_text = self.extract_page_content(response)
         if page_text and len(page_text.strip()) > 500:  # Only save substantial content
@@ -111,7 +134,19 @@ class DocSpider(scrapy.Spider):
                         pdf_url=url     # Store PDF URL for LLM
                     )
                 else:
-                    yield response.follow(url, self.parse)
+                    # Follow links with Playwright for potential Cloudflare-protected pages
+                    yield scrapy.Request(
+                        url,
+                        meta={
+                            "playwright": True,
+                            "playwright_page_methods": [
+                                PageMethod("wait_for_selector", "body", timeout=30000),
+                                PageMethod("wait_for_timeout", 2000),
+                            ],
+                            "playwright_include_page": True,
+                        },
+                        callback=self.parse,
+                    )
         
         self.logger.info(f"📊 Page {response.url}: Found {pdf_count} PDFs out of {link_count} links")
     

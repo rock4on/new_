@@ -18,6 +18,28 @@ AUTOTHROTTLE_TARGET_CONCURRENCY = 8.0
 FILES_STORE = "downloads"          # PDFs land here
 ROBOTSTXT_OBEY = True
 
+# -- Playwright configuration for Cloudflare bypass -------------------
+DOWNLOADER_MIDDLEWARES = {
+    "scrapy_playwright.middleware.ScrapyPlaywrightDownloaderMiddleware": 543,
+}
+
+# Set async reactor (required for Playwright)
+TWISTED_REACTOR = "twisted.internet.asyncioreactor.AsyncioSelectorReactor"
+
+# Playwright browser settings
+PLAYWRIGHT_BROWSER_TYPE = "chromium"
+PLAYWRIGHT_DEFAULT_NAVIGATION_TIMEOUT = 30 * 1000  # 30 seconds in milliseconds
+PLAYWRIGHT_LAUNCH_OPTIONS = {
+    "headless": True,
+    "args": [
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--disable-web-security",
+        "--disable-features=VizDisplayCompositor"
+    ]
+}
+
 # -- Standard pipeline: Download PDFs + save metadata --------------------
 ITEM_PIPELINES = {
     "scrapy.pipelines.files.FilesPipeline": 400,           # Download PDFs
