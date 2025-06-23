@@ -14,6 +14,15 @@ class DocSpider(scrapy.Spider):
     custom_settings = {
         "FILES_STORE": "downloads",
         
+        # Allow error responses for debugging
+        "HTTPERROR_ALLOWED_CODES": [403, 404, 500],  # Handle error responses
+        
+        # Conservative settings for government sites
+        "CONCURRENT_REQUESTS": 1,           # Single request at a time
+        "CONCURRENT_REQUESTS_PER_DOMAIN": 1, # One request per domain
+        "DOWNLOAD_DELAY": 10,               # 10 second delay between requests
+        "RANDOMIZE_DOWNLOAD_DELAY": 0.5,    # Randomize delay ±50%
+        
         # Anti-loop and duplicate prevention
         "DUPEFILTER_DEBUG": True,           # Log duplicate requests
         "DEPTH_LIMIT": 10,                  # Limit crawl depth
@@ -23,25 +32,20 @@ class DocSpider(scrapy.Spider):
         "CLOSESPIDER_ITEMCOUNT": 1000,      # Stop after 1000 items
         "CLOSESPIDER_PAGECOUNT": 5000,      # Stop after 5000 pages
         "CLOSESPIDER_TIMEOUT": 3600,        # Stop after 1 hour
-        "DOWNLOAD_TIMEOUT": 30,             # 30s timeout per request
+        "DOWNLOAD_TIMEOUT": 60,             # 60s timeout per request
         
         # URL filtering
         "URLLENGTH_LIMIT": 2083,            # Skip very long URLs
-        "HTTPERROR_ALLOWED_CODES": [404],   # Handle 404s gracefully
         
         # Content filtering
         "DOWNLOAD_MAXSIZE": 50 * 1024 * 1024,  # 50MB max file size
         "DOWNLOAD_WARNSIZE": 10 * 1024 * 1024,  # Warn at 10MB
         
-        # High-performance settings
-        "CONCURRENT_REQUESTS": 32,          # Total concurrent requests
-        "CONCURRENT_REQUESTS_PER_DOMAIN": 16, # Per domain concurrency
-        "DOWNLOAD_DELAY": 0.5,              # Reduced delay between requests
-        "RANDOMIZE_DOWNLOAD_DELAY": 0.5,    # Randomize delay ±50%
+        # Auto-throttling for dynamic adjustment
         "AUTOTHROTTLE_ENABLED": True,       # Auto-adjust delays
-        "AUTOTHROTTLE_START_DELAY": 0.5,    # Start with 0.5s delay
-        "AUTOTHROTTLE_MAX_DELAY": 5,        # Max 5s delay
-        "AUTOTHROTTLE_TARGET_CONCURRENCY": 8.0,  # Target 8 concurrent requests
+        "AUTOTHROTTLE_START_DELAY": 10,     # Start with 10s delay
+        "AUTOTHROTTLE_MAX_DELAY": 30,       # Max 30s delay
+        "AUTOTHROTTLE_TARGET_CONCURRENCY": 1.0,  # Target 1 concurrent request
         
         # Memory management
         "MEMUSAGE_ENABLED": True,           # Monitor memory usage
