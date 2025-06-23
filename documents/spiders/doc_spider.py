@@ -192,6 +192,22 @@ class DocSpider(scrapy.Spider):
 
     def parse_content(self, response):
         """Common parsing logic for both FlareSolverr and regular responses"""
+        # Check if this is a 403 response
+        if response.status == 403:
+            self.logger.error(f"403 Forbidden for {response.url}")
+            self.logger.error(f"Response headers: {dict(response.headers)}")
+            self.logger.error(f"Response body preview: {response.text[:1000]}...")
+            
+            # Check if it's a Cloudflare 403 or something else
+            if "cloudflare" in response.text.lower():
+                self.logger.error("This appears to be a Cloudflare 403 block")
+            elif "access denied" in response.text.lower():
+                self.logger.error("This appears to be an access denied error")
+            elif "forbidden" in response.text.lower():
+                self.logger.error("This appears to be a generic forbidden error")
+            
+            return  # Don't process 403 responses further
+        
         # Extract and save page text content
         page_text = self.extract_page_content(response)
         if page_text and len(page_text.strip()) > 500:  # Only save substantial content

@@ -14,6 +14,9 @@ AUTOTHROTTLE_START_DELAY = 0.5
 AUTOTHROTTLE_MAX_DELAY = 5
 AUTOTHROTTLE_TARGET_CONCURRENCY = 8.0
 
+# Allow 403 responses to be processed (for debugging)
+HTTPERROR_ALLOWED_CODES = [403, 404]
+
 # -- Real-time LLM processing ---------------------------------------------
 FILES_STORE = "downloads"          # PDFs land here
 ROBOTSTXT_OBEY = True
