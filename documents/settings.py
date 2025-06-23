@@ -31,14 +31,48 @@ TWISTED_REACTOR = "twisted.internet.asyncioreactor.AsyncioSelectorReactor"
 PLAYWRIGHT_BROWSER_TYPE = "chromium"
 PLAYWRIGHT_DEFAULT_NAVIGATION_TIMEOUT = 30 * 1000  # 30 seconds in milliseconds
 PLAYWRIGHT_LAUNCH_OPTIONS = {
-    "headless": True,
+    "headless": False,
     "args": [
         "--no-sandbox",
         "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--disable-web-security",
-        "--disable-features=VizDisplayCompositor"
+        "--disable-blink-features=AutomationControlled",
+        "--disable-extensions-file-access-check",
+        "--disable-extensions-http-throttling",
+        "--disable-extensions-except",
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+        "--disable-features=TranslateUI,BlinkGenPropertyTrees",
+        "--disable-ipc-flooding-protection",
+        "--enable-features=NetworkService,NetworkServiceLogging",
+        "--force-color-profile=srgb",
+        "--metrics-recording-only",
+        "--no-first-run",
+        "--no-default-browser-check",
+        "--no-pings",
+        "--password-store=basic",
+        "--use-mock-keychain",
+        "--export-tagged-pdf"
     ]
+}
+
+# Additional context settings for stealth
+PLAYWRIGHT_CONTEXTS = {
+    "default": {
+        "viewport": {"width": 1920, "height": 1080},
+        "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "locale": "en-US",
+        "timezone_id": "America/New_York",
+        "permissions": ["geolocation"],
+        "extra_http_headers": {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "DNT": "1",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+        }
+    }
 }
 
 # -- Standard pipeline: Download PDFs + save metadata --------------------

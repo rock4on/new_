@@ -69,8 +69,16 @@ class DocSpider(scrapy.Spider):
                 meta={
                     "playwright": True,
                     "playwright_page_methods": [
+                        # Remove automation indicators
+                        PageMethod("evaluate", "() => { Object.defineProperty(navigator, 'webdriver', {get: () => undefined}) }"),
+                        PageMethod("evaluate", "() => { window.chrome = { runtime: {} } }"),
+                        PageMethod("evaluate", "() => { Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]}) }"),
+                        PageMethod("evaluate", "() => { Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']}) }"),
+                        # Wait for page load
+                        PageMethod("wait_for_load_state", "domcontentloaded"),
+                        PageMethod("wait_for_timeout", 2000),  # Random human-like delay
                         PageMethod("wait_for_selector", "body", timeout=30000),
-                        PageMethod("wait_for_timeout", 3000),  # Wait for dynamic content
+                        PageMethod("wait_for_timeout", 1000),  # Additional wait
                     ],
                     "playwright_include_page": True,
                 },
@@ -140,8 +148,11 @@ class DocSpider(scrapy.Spider):
                         meta={
                             "playwright": True,
                             "playwright_page_methods": [
+                                # Anti-detection measures
+                                PageMethod("evaluate", "() => { Object.defineProperty(navigator, 'webdriver', {get: () => undefined}) }"),
+                                PageMethod("wait_for_load_state", "domcontentloaded"),
+                                PageMethod("wait_for_timeout", 1500),  # Human-like delay
                                 PageMethod("wait_for_selector", "body", timeout=30000),
-                                PageMethod("wait_for_timeout", 2000),
                             ],
                             "playwright_include_page": True,
                         },
