@@ -19,8 +19,9 @@ FILES_STORE = "downloads"          # PDFs land here
 ROBOTSTXT_OBEY = True
 
 # -- Playwright configuration for Cloudflare bypass -------------------
-DOWNLOADER_MIDDLEWARES = {
-    "scrapy_playwright.middleware.ScrapyPlaywrightDownloaderMiddleware": 543,
+DOWNLOAD_HANDLERS = {
+    "http": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
+    "https": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
 }
 
 # Set async reactor (required for Playwright)
