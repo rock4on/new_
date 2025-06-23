@@ -346,71 +346,100 @@ class DocSpider(scrapy.Spider):
         )
     
     def download_pdf_with_flaresolverr(self, pdf_url, metadata):
-        """Download PDF using FlareSolverr"""
+        """Download PDF using FlareSolverr directly"""
         self.logger.info(f"📥 Downloading PDF via FlareSolverr: {pdf_url}")
         
         try:
-            # Use FlareSolverr to solve the PDF URL
-            solution = self.solve_cloudflare(pdf_url)
+            # Use FlareSolverr to download the PDF directly
+            import random
+            import time
+            import base64
             
-            if solution and solution.get("status_code") == 200:
-                # Get cookies and session from FlareSolverr
-                cookies = solution.get("cookies", [])
-                cookie_dict = {cookie["name"]: cookie["value"] for cookie in cookies}
-                user_agent = solution.get("userAgent", self.current_ua)
+            # Add delay before PDF download
+            time.sleep(random.uniform(2, 4))
+            
+            # Use FlareSolverr with PDF-specific headers
+            payload = {
+                "cmd": "request.get",
+                "url": pdf_url,
+                "maxTimeout": 120000,  # 2 minutes for PDF download
+                "headers": {
+                    "User-Agent": random.choice(self.user_agents),
+                    "Accept": "application/pdf,application/octet-stream,*/*;q=0.9",
+                    "Accept-Language": "en-US,en;q=0.9,tl;q=0.8",
+                    "Accept-Encoding": "gzip, deflate, br",
+                    "Referer": metadata.get("src_page", "https://www.sec.gov.ph/"),
+                    "Connection": "keep-alive",
+                    "Upgrade-Insecure-Requests": "1",
+                    "Sec-Fetch-Dest": "document",
+                    "Sec-Fetch-Mode": "navigate",
+                    "Sec-Fetch-Site": "same-origin",
+                    "Cache-Control": "max-age=0"
+                },
+                "session": f"pdf_session_{random.randint(1000, 9999)}",
+                "returnOnlyCookies": False
+            }
+            
+            response = requests.post(self.flaresolverr_url, json=payload, timeout=130)
+            response.raise_for_status()
+            result = response.json()
+            
+            if result.get("status") == "ok":
+                solution = result.get("solution", {})
+                status_code = solution.get("status", 0)
                 
-                # Make direct request with solved session
-                import requests
-                pdf_response = requests.get(
-                    pdf_url,
-                    cookies=cookie_dict,
-                    headers={
-                        "User-Agent": user_agent,
-                        "Accept": "application/pdf,application/octet-stream,*/*",
-                        "Referer": metadata.get("src_page", ""),
-                        "Connection": "keep-alive"
-                    },
-                    timeout=120,
-                    stream=True
-                )
-                
-                if pdf_response.status_code == 200:
-                    # Check if it's actually a PDF
-                    content_type = pdf_response.headers.get('content-type', '').lower()
-                    if 'pdf' in content_type or pdf_response.content[:4] == b'%PDF':
-                        
-                        # Save the PDF
-                        downloads_dir = Path(self.settings["FILES_STORE"])
-                        downloads_dir.mkdir(exist_ok=True)
-                        
-                        pdf_filename = metadata["filename"]
-                        pdf_path = downloads_dir / pdf_filename
-                        
-                        with open(pdf_path, 'wb') as f:
-                            for chunk in pdf_response.iter_content(chunk_size=8192):
-                                if chunk:
-                                    f.write(chunk)
-                        
-                        file_size = pdf_path.stat().st_size
-                        self.logger.info(f"✅ PDF downloaded successfully: {pdf_filename} ({file_size} bytes)")
-                        
-                        # Update metadata
-                        metadata["status"] = "downloaded"
-                        metadata["download_size"] = file_size
-                        metadata["downloaded_at"] = datetime.now().isoformat()
-                        metadata["content_type"] = content_type
-                        
-                        # Save updated metadata
-                        self.save_individual_metadata(metadata)
-                        return True
+                if status_code == 200:
+                    # Try to get the PDF content from FlareSolverr response
+                    response_content = solution.get("response", "")
+                    
+                    # Check if we have binary content
+                    if response_content and len(response_content) > 1000:
+                        try:
+                            # FlareSolverr might return base64 encoded binary content
+                            try:
+                                pdf_content = base64.b64decode(response_content)
+                            except:
+                                # If not base64, try latin1 encoding for binary
+                                pdf_content = response_content.encode('latin1')
+                            
+                            # Check if it's actually a PDF
+                            if pdf_content.startswith(b'%PDF') or len(pdf_content) > 10000:
+                                # Save the PDF
+                                downloads_dir = Path(self.settings["FILES_STORE"])
+                                downloads_dir.mkdir(exist_ok=True)
+                                
+                                pdf_filename = metadata["filename"]
+                                pdf_path = downloads_dir / pdf_filename
+                                
+                                with open(pdf_path, 'wb') as f:
+                                    f.write(pdf_content)
+                                
+                                file_size = pdf_path.stat().st_size
+                                self.logger.info(f"✅ PDF downloaded via FlareSolverr: {pdf_filename} ({file_size} bytes)")
+                                
+                                # Update metadata
+                                metadata["status"] = "downloaded_flaresolverr"
+                                metadata["download_size"] = file_size
+                                metadata["downloaded_at"] = datetime.now().isoformat()
+                                
+                                # Save updated metadata
+                                self.save_individual_metadata(metadata)
+                                return True
+                            else:
+                                self.logger.warning(f"❌ Content doesn't appear to be a PDF")
+                                metadata["status"] = "not_pdf_content"
+                                
+                        except Exception as save_error:
+                            self.logger.error(f"❌ Error saving PDF: {save_error}")
+                            metadata["status"] = f"save_error_{type(save_error).__name__}"
                     else:
-                        self.logger.warning(f"❌ Response is not a PDF: {content_type}")
-                        metadata["status"] = f"not_pdf_{content_type}"
+                        self.logger.error(f"❌ No content received from FlareSolverr")
+                        metadata["status"] = "no_content"
                 else:
-                    self.logger.error(f"❌ PDF download failed: HTTP {pdf_response.status_code}")
-                    metadata["status"] = f"http_error_{pdf_response.status_code}"
+                    self.logger.error(f"❌ FlareSolverr returned status {status_code} for PDF")
+                    metadata["status"] = f"flaresolverr_status_{status_code}"
             else:
-                self.logger.error(f"❌ FlareSolverr failed for PDF: {pdf_url}")
+                self.logger.error(f"❌ FlareSolverr failed: {result.get('message', 'Unknown error')}")
                 metadata["status"] = "flaresolverr_failed"
                 
         except Exception as e:
