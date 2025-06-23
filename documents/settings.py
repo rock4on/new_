@@ -5,8 +5,15 @@ NEWSPIDER_MODULE = "documents.spiders"
 # -- Conservative settings for government sites ---------------------------
 CONCURRENT_REQUESTS = 1            # Single request at a time
 CONCURRENT_REQUESTS_PER_DOMAIN = 1  # One request per domain
-DOWNLOAD_DELAY = 10                # 10 second delay between requests
+DOWNLOAD_DELAY = 15                # 15 second delay between requests
 RANDOMIZE_DOWNLOAD_DELAY = 0.5     # Randomize delay ±50%
+
+# Enhanced retry and connection settings
+RETRY_ENABLED = True
+RETRY_TIMES = 5                    # Retry failed requests 5 times
+RETRY_HTTP_CODES = [500, 502, 503, 504, 408, 429, 403]  # Retry these HTTP codes
+DOWNLOAD_TIMEOUT = 300             # 5 minute timeout for large PDFs
+DOWNLOAD_MAXSIZE = 100 * 1024 * 1024  # 100MB max file size
 
 # Auto-throttling for dynamic adjustment
 AUTOTHROTTLE_ENABLED = True
