@@ -76,9 +76,11 @@ class DocSpider(scrapy.Spider):
                         PageMethod("evaluate", "() => { Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']}) }"),
                         # Wait for page load
                         PageMethod("wait_for_load_state", "domcontentloaded"),
-                        PageMethod("wait_for_timeout", 2000),  # Random human-like delay
-                        PageMethod("wait_for_selector", "body", timeout=30000),
-                        PageMethod("wait_for_timeout", 1000),  # Additional wait
+                        PageMethod("wait_for_timeout", 3000),  # Initial wait
+                        # Wait for Cloudflare to complete (if present)
+                        PageMethod("wait_for_timeout", 10000),  # Give Cloudflare time to process
+                        PageMethod("wait_for_selector", "body", timeout=60000),  # 60 second timeout
+                        PageMethod("wait_for_timeout", 5000),  # Final wait to ensure page is stable
                     ],
                     "playwright_include_page": True,
                 },
@@ -151,8 +153,9 @@ class DocSpider(scrapy.Spider):
                                 # Anti-detection measures
                                 PageMethod("evaluate", "() => { Object.defineProperty(navigator, 'webdriver', {get: () => undefined}) }"),
                                 PageMethod("wait_for_load_state", "domcontentloaded"),
-                                PageMethod("wait_for_timeout", 1500),  # Human-like delay
-                                PageMethod("wait_for_selector", "body", timeout=30000),
+                                PageMethod("wait_for_timeout", 3000),  # Initial wait
+                                PageMethod("wait_for_timeout", 8000),  # Cloudflare processing time
+                                PageMethod("wait_for_selector", "body", timeout=60000),  # 60 second timeout
                             ],
                             "playwright_include_page": True,
                         },
