@@ -83,8 +83,8 @@ class DocSpider(scrapy.Spider):
         import random
         self.current_ua = random.choice(self.user_agents)
 
-    def solve_cloudflare(self, url, is_binary=False):
-        """Use FlareSolverr to bypass protection with enhanced stealth"""
+    def solve_cloudflare(self, url):
+        """Use FlareSolverr to bypass protection"""
         import random
         import time
         
@@ -94,18 +94,11 @@ class DocSpider(scrapy.Spider):
         # Rotate user agent
         self.current_ua = random.choice(self.user_agents)
         
-        # Different headers for PDF downloads vs regular pages
-        if is_binary:
-            headers = {
-                "User-Agent": self.current_ua,
-                "Accept": "application/pdf,application/octet-stream,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9",
-                "Accept-Encoding": "gzip, deflate, br",
-                "Connection": "keep-alive",
-                "Referer": "https://www.google.com.ph/"
-            }
-        else:
-            headers = {
+        payload = {
+            "cmd": "request.get",
+            "url": url,
+            "maxTimeout": 90000,  # 90 seconds timeout
+            "headers": {
                 "User-Agent": self.current_ua,
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
                 "Accept-Language": "en-US,en;q=0.9,tl;q=0.8,fil;q=0.7",
@@ -119,22 +112,13 @@ class DocSpider(scrapy.Spider):
                 "Sec-Fetch-Site": "cross-site",
                 "Sec-Fetch-User": "?1",
                 "Referer": "https://www.google.com.ph/"
-            }
-        
-        payload = {
-            "cmd": "request.get",
-            "url": url,
-            "maxTimeout": 180000,  # 3 minutes timeout for PDFs
-            "headers": headers,
+            },
             "session": f"sec_gov_ph_session_{random.randint(1000, 9999)}",
-            "returnOnlyCookies": False,
-            "proxy": {
-                "url": ""
-            }
+            "returnOnlyCookies": False
         }
         
         try:
-            response = requests.post(self.flaresolverr_url, json=payload, timeout=70)
+            response = requests.post(self.flaresolverr_url, json=payload, timeout=100)
             response.raise_for_status()
             result = response.json()
             
@@ -328,7 +312,7 @@ class DocSpider(scrapy.Spider):
         self.logger.info(f"📊 Page {response.url}: Found {pdf_count} PDFs out of {link_count} links")
     
     def create_pdf_item(self, pdf_url, src_page, title):
-        """Download PDF using FlareSolverr"""
+        """Create a PDF item for download"""
         # Generate filename using same logic as FilesPipeline
         url_hash = hashlib.sha1(pdf_url.encode()).hexdigest()
         scrapy_filename = f"{url_hash}.pdf"
@@ -343,179 +327,20 @@ class DocSpider(scrapy.Spider):
             "src_page": src_page,
             "title": title,
             "scraped_at": datetime.now().isoformat(),
-            "status": "downloading"
+            "status": "found"
         }
         self.pdf_metadata.append(metadata)
         
         # Save individual metadata file immediately
         self.save_individual_metadata(metadata)
         
-        # Download PDF directly using FlareSolverr
-        self.download_pdf_via_flaresolverr(pdf_url, metadata)
+        yield DocItem(
+            file_urls=[pdf_url],
+            src_page=src_page,
+            title=title,     # Store original link text
+            pdf_url=pdf_url  # Store PDF URL for LLM
+        )
     
-    def download_pdf_via_flaresolverr(self, pdf_url, metadata):
-        """Download PDF using FlareSolverr with binary handling"""
-        self.logger.info(f"📥 Downloading PDF via FlareSolverr: {pdf_url}")
-        
-        try:
-            # Use FlareSolverr to get the PDF
-            solution = self.solve_cloudflare(pdf_url, is_binary=True)
-            
-            if solution and solution.get("status_code") == 200:
-                # Get the response content (should be binary PDF data)
-                response_content = solution.get("html", "")
-                
-                # FlareSolverr returns content as text, but PDFs might be base64 encoded
-                # or we need to handle it as binary data
-                try:
-                    # Try to get binary content directly
-                    import base64
-                    import requests
-                    
-                    # Make a direct request to get the actual PDF bytes
-                    # Use the same session/cookies from FlareSolverr
-                    cookies = solution.get("cookies", [])
-                    cookie_dict = {cookie["name"]: cookie["value"] for cookie in cookies}
-                    user_agent = solution.get("userAgent", self.current_ua)
-                    
-                    # Direct binary download with solved session
-                    pdf_response = requests.get(
-                        pdf_url,
-                        cookies=cookie_dict,
-                        headers={
-                            "User-Agent": user_agent,
-                            "Accept": "application/pdf,application/octet-stream,*/*",
-                            "Referer": metadata.get("src_page", "")
-                        },
-                        timeout=120,
-                        stream=True
-                    )
-                    
-                    if pdf_response.status_code == 200:
-                        # Save the PDF
-                        downloads_dir = Path(self.settings["FILES_STORE"])
-                        downloads_dir.mkdir(exist_ok=True)
-                        
-                        pdf_filename = metadata["filename"]
-                        pdf_path = downloads_dir / pdf_filename
-                        
-                        with open(pdf_path, 'wb') as f:
-                            for chunk in pdf_response.iter_content(chunk_size=8192):
-                                f.write(chunk)
-                        
-                        file_size = pdf_path.stat().st_size
-                        self.logger.info(f"✅ PDF downloaded successfully: {pdf_filename} ({file_size} bytes)")
-                        
-                        # Update metadata
-                        metadata["status"] = "downloaded"
-                        metadata["download_size"] = file_size
-                        metadata["downloaded_at"] = datetime.now().isoformat()
-                        
-                        # Save updated metadata
-                        self.save_individual_metadata(metadata)
-                        
-                        return True
-                    else:
-                        self.logger.error(f"❌ Direct PDF download failed: {pdf_response.status_code}")
-                        
-                except Exception as e:
-                    self.logger.error(f"❌ Error in direct PDF download: {e}")
-                    
-                    # Fallback: try to save the content from FlareSolverr directly
-                    if len(response_content) > 1000:  # Basic size check
-                        try:
-                            downloads_dir = Path(self.settings["FILES_STORE"])
-                            downloads_dir.mkdir(exist_ok=True)
-                            
-                            pdf_filename = metadata["filename"]
-                            pdf_path = downloads_dir / pdf_filename
-                            
-                            # Try to decode if it's base64, otherwise save as is
-                            try:
-                                pdf_content = base64.b64decode(response_content)
-                            except:
-                                pdf_content = response_content.encode('latin1')
-                            
-                            with open(pdf_path, 'wb') as f:
-                                f.write(pdf_content)
-                            
-                            file_size = pdf_path.stat().st_size
-                            self.logger.info(f"✅ PDF saved via FlareSolverr fallback: {pdf_filename} ({file_size} bytes)")
-                            
-                            metadata["status"] = "downloaded_fallback"
-                            metadata["download_size"] = file_size
-                            metadata["downloaded_at"] = datetime.now().isoformat()
-                            
-                            self.save_individual_metadata(metadata)
-                            return True
-                            
-                        except Exception as fallback_error:
-                            self.logger.error(f"❌ Fallback PDF save failed: {fallback_error}")
-            
-            # If we get here, download failed
-            self.logger.error(f"❌ PDF download failed for: {pdf_url}")
-            metadata["status"] = "failed_download"
-            self.save_individual_metadata(metadata)
-            return False
-            
-        except Exception as e:
-            self.logger.error(f"❌ PDF download error: {e}")
-            metadata["status"] = f"failed_error_{type(e).__name__}"
-            self.save_individual_metadata(metadata)
-            return False
-    
-    def download_pdf(self, response):
-        """Handle successful PDF download"""
-        metadata = response.meta.get("pdf_metadata", {})
-        
-        if response.status == 200:
-            self.logger.info(f"✅ Successfully downloaded PDF: {response.url}")
-            # Update metadata status
-            metadata["status"] = "downloaded"
-            metadata["download_size"] = len(response.body)
-            
-            # Create DocItem for the file pipeline
-            yield DocItem(
-                file_urls=[response.url],
-                src_page=metadata.get("src_page"),
-                title=metadata.get("title"),
-                pdf_url=response.url
-            )
-        else:
-            self.logger.error(f"❌ PDF download failed with status {response.status}: {response.url}")
-            metadata["status"] = f"failed_status_{response.status}"
-    
-    def handle_pdf_error(self, failure):
-        """Handle PDF download errors"""
-        request = failure.request
-        metadata = request.meta.get("pdf_metadata", {})
-        
-        self.logger.error(f"❌ PDF download error for {request.url}: {failure.value}")
-        metadata["status"] = f"failed_error_{type(failure.value).__name__}"
-        
-        # Try downloading through FlareSolverr as backup
-        self.logger.info(f"🔄 Retrying PDF download through FlareSolverr: {request.url}")
-        solution = self.solve_cloudflare(request.url)
-        if solution and solution.get("status_code") == 200:
-            # Save PDF content directly if FlareSolverr worked
-            try:
-                pdf_content = solution.get("html", "").encode('latin1')  # Try to get binary content
-                if pdf_content and len(pdf_content) > 1000:  # Basic size check
-                    downloads_dir = Path(self.settings["FILES_STORE"])
-                    downloads_dir.mkdir(exist_ok=True)
-                    
-                    pdf_filename = metadata.get("filename", "unknown.pdf")
-                    pdf_path = downloads_dir / pdf_filename
-                    
-                    with open(pdf_path, 'wb') as f:
-                        f.write(pdf_content)
-                    
-                    self.logger.info(f"✅ PDF saved via FlareSolverr: {pdf_filename}")
-                    metadata["status"] = "downloaded_via_flaresolverr"
-                    
-            except Exception as e:
-                self.logger.error(f"❌ Failed to save PDF via FlareSolverr: {e}")
-                metadata["status"] = "failed_flaresolverr_save"
     
     def extract_page_content(self, response):
         """Extract meaningful text content from web page"""
