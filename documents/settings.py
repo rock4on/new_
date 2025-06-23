@@ -29,7 +29,7 @@ TWISTED_REACTOR = "twisted.internet.asyncioreactor.AsyncioSelectorReactor"
 
 # Playwright browser settings
 PLAYWRIGHT_BROWSER_TYPE = "chromium"
-PLAYWRIGHT_DEFAULT_NAVIGATION_TIMEOUT = 60 * 1000  # 60 seconds in milliseconds
+PLAYWRIGHT_DEFAULT_NAVIGATION_TIMEOUT = 120 * 1000  # 120 seconds in milliseconds
 PLAYWRIGHT_LAUNCH_OPTIONS = {
     "headless": False,
     "args": [
