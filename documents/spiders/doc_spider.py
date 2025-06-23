@@ -398,11 +398,73 @@ class DocSpider(scrapy.Spider):
                     self.logger.info(f"  Content length: {len(response_content)}")
                     self.logger.info(f"  Content preview: {response_content[:200]}...")
                     
+                    # Check if this looks like a direct PDF
+                    if content_type and 'pdf' in content_type.lower():
+                        self.logger.info("📄 Content-Type indicates this is a direct PDF")
+                    elif response_content.startswith('%PDF'):
+                        self.logger.info("📄 Content starts with %PDF - this is a direct PDF")
+                    elif response_content.startswith('JVBERi0'):
+                        self.logger.info("📄 Content looks like base64 encoded PDF")
+                    else:
+                        self.logger.info("📄 Content does not appear to be a direct PDF")
+                    
                     # Check if we have content
                     if response_content and len(response_content) > 1000:
                         try:
+                            # First check if this is a direct PDF (not HTML viewer)
+                            is_direct_pdf = (
+                                response_content.startswith('%PDF') or
+                                response_content.startswith('JVBERi0') or  # base64 PDF
+                                (content_type and 'pdf' in content_type.lower())
+                            )
+                            
+                            if is_direct_pdf:
+                                self.logger.info("📄 Processing direct PDF content from FlareSolverr")
+                                
+                                # Handle direct PDF content
+                                pdf_content = None
+                                
+                                if response_content.startswith('%PDF'):
+                                    # Direct PDF text, encode to bytes
+                                    try:
+                                        pdf_content = response_content.encode('latin1')
+                                    except:
+                                        pdf_content = response_content.encode('utf-8', errors='ignore')
+                                        
+                                elif response_content.startswith('JVBERi0'):
+                                    # Base64 encoded PDF
+                                    import base64
+                                    try:
+                                        pdf_content = base64.b64decode(response_content)
+                                    except:
+                                        pass
+                                
+                                if pdf_content and pdf_content.startswith(b'%PDF'):
+                                    # Save the direct PDF
+                                    downloads_dir = Path(self.settings["FILES_STORE"])
+                                    downloads_dir.mkdir(exist_ok=True)
+                                    
+                                    pdf_filename = metadata["filename"]
+                                    pdf_path = downloads_dir / pdf_filename
+                                    
+                                    with open(pdf_path, 'wb') as f:
+                                        f.write(pdf_content)
+                                    
+                                    file_size = pdf_path.stat().st_size
+                                    self.logger.info(f"✅ Direct PDF downloaded: {pdf_filename} ({file_size} bytes)")
+                                    
+                                    metadata["status"] = "downloaded_direct_pdf"
+                                    metadata["download_size"] = file_size
+                                    metadata["downloaded_at"] = datetime.now().isoformat()
+                                    metadata["content_type"] = content_type
+                                    
+                                    self.save_individual_metadata(metadata)
+                                    return True
+                                else:
+                                    self.logger.error("❌ Could not process direct PDF content")
+                                    
                             # Check if this is HTML content with PDF viewer
-                            if '<html' in response_content.lower() or '<!doctype' in response_content.lower():
+                            elif '<html' in response_content.lower() or '<!doctype' in response_content.lower():
                                 self.logger.info(f"📄 Received HTML with PDF viewer - extracting actual PDF URL")
                                 
                                 # Save HTML for debugging
@@ -426,9 +488,14 @@ class DocSpider(scrapy.Spider):
                                     
                                     return self.download_actual_pdf(actual_pdf_url, metadata)
                                 else:
-                                    # Use JavaScript execution to wait for PDF to load
-                                    self.logger.info(f"🔄 Using JavaScript execution to load PDF viewer")
-                                    return self.download_pdf_with_js_execution(pdf_url, metadata)
+                                    # Try a simple second request with longer timeout first
+                                    self.logger.info(f"🔄 Trying second request with longer timeout")
+                                    time.sleep(5)  # Wait a bit
+                                    
+                                    # Try JavaScript execution as last resort
+                                    if not self.download_pdf_with_js_execution(pdf_url, metadata):
+                                        # If JS execution fails, at least we have the viewer HTML
+                                        pass
                                 
                                 # Fallback: save as HTML
                                 self.logger.info(f"📄 Saving PDF viewer HTML as fallback")
@@ -605,10 +672,19 @@ class DocSpider(scrapy.Spider):
             r'pdf_url\s*[:=]\s*["\']([^"\']*)["\']',     # pdf_url variable
         ]
         
+        # Debug: show what we're looking for
+        if 'algori' in html_content.lower():
+            print("🔍 Found algori-pdf-viewer in HTML")
+        
         for pattern in patterns:
             matches = re.findall(pattern, html_content, re.IGNORECASE)
+            if matches:
+                print(f"🔍 Pattern '{pattern}' found {len(matches)} matches: {matches[:3]}")
+            
             for match in matches:
-                if match and match != original_url:
+                if match and match != original_url and '.pdf' in match.lower():
+                    print(f"✅ Found potential PDF URL: {match}")
+                    
                     # Convert relative URLs to absolute
                     if match.startswith('/'):
                         from urllib.parse import urljoin, urlparse
@@ -683,7 +759,10 @@ class DocSpider(scrapy.Spider):
             import random
             import time
             
-            # Enhanced FlareSolverr payload with JavaScript execution
+            # Add delay before JS execution attempt
+            time.sleep(random.uniform(3, 6))
+            
+            # Enhanced FlareSolverr payload with longer timeout for JS execution
             payload = {
                 "cmd": "request.get",
                 "url": pdf_url,
@@ -695,12 +774,7 @@ class DocSpider(scrapy.Spider):
                     "Referer": metadata.get("src_page", "https://www.sec.gov.ph/"),
                 },
                 "session": f"pdf_js_session_{random.randint(1000, 9999)}",
-                "returnOnlyCookies": False,
-                # Add wait for PDF to load
-                "postData": {
-                    "wait": 10000,  # Wait 10 seconds for JS to execute
-                    "waitUntil": "networkidle0"  # Wait until network is idle
-                }
+                "returnOnlyCookies": False
             }
             
             response = requests.post(self.flaresolverr_url, json=payload, timeout=200)
