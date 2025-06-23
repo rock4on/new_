@@ -391,19 +391,55 @@ class DocSpider(scrapy.Spider):
                 if status_code == 200:
                     # Try to get the PDF content from FlareSolverr response
                     response_content = solution.get("response", "")
+                    content_type = solution.get("headers", {}).get("content-type", "")
                     
-                    # Check if we have binary content
+                    self.logger.info(f"FlareSolverr response info:")
+                    self.logger.info(f"  Content-Type: {content_type}")
+                    self.logger.info(f"  Content length: {len(response_content)}")
+                    self.logger.info(f"  Content preview: {response_content[:200]}...")
+                    
+                    # Check if we have content
                     if response_content and len(response_content) > 1000:
                         try:
-                            # FlareSolverr might return base64 encoded binary content
+                            # First check if this is HTML (error page) or actual PDF
+                            if '<html' in response_content.lower() or '<!doctype' in response_content.lower():
+                                self.logger.error(f"❌ Received HTML instead of PDF - likely protected or redirected")
+                                self.logger.error(f"Response preview: {response_content[:500]}...")
+                                metadata["status"] = "received_html_not_pdf"
+                                self.save_individual_metadata(metadata)
+                                return False
+                            
+                            # Try different methods to get binary content
+                            pdf_content = None
+                            
+                            # Method 1: Try base64 decode
                             try:
                                 pdf_content = base64.b64decode(response_content)
+                                if not pdf_content.startswith(b'%PDF'):
+                                    pdf_content = None
                             except:
-                                # If not base64, try latin1 encoding for binary
-                                pdf_content = response_content.encode('latin1')
+                                pass
                             
-                            # Check if it's actually a PDF
-                            if pdf_content.startswith(b'%PDF') or len(pdf_content) > 10000:
+                            # Method 2: Try direct bytes if it looks like PDF text
+                            if pdf_content is None and response_content.startswith('%PDF'):
+                                try:
+                                    pdf_content = response_content.encode('latin1')
+                                except:
+                                    try:
+                                        pdf_content = response_content.encode('utf-8')
+                                    except:
+                                        pass
+                            
+                            # Method 3: Last resort - try utf-8 encoding
+                            if pdf_content is None:
+                                try:
+                                    # Handle Unicode characters properly
+                                    pdf_content = response_content.encode('utf-8', errors='ignore')
+                                except:
+                                    pass
+                            
+                            # Check if we got valid PDF content
+                            if pdf_content and (pdf_content.startswith(b'%PDF') or len(pdf_content) > 10000):
                                 # Save the PDF
                                 downloads_dir = Path(self.settings["FILES_STORE"])
                                 downloads_dir.mkdir(exist_ok=True)
@@ -427,6 +463,53 @@ class DocSpider(scrapy.Spider):
                                 return True
                             else:
                                 self.logger.warning(f"❌ Content doesn't appear to be a PDF")
+                                self.logger.info(f"🔄 Trying direct download with FlareSolverr session...")
+                                
+                                # Try direct download using FlareSolverr's session
+                                cookies = solution.get("cookies", [])
+                                cookie_dict = {cookie["name"]: cookie["value"] for cookie in cookies}
+                                user_agent = solution.get("userAgent", self.current_ua)
+                                
+                                try:
+                                    direct_response = requests.get(
+                                        pdf_url,
+                                        cookies=cookie_dict,
+                                        headers={
+                                            "User-Agent": user_agent,
+                                            "Accept": "application/pdf,application/octet-stream,*/*",
+                                            "Referer": metadata.get("src_page", ""),
+                                        },
+                                        timeout=60,
+                                        stream=True
+                                    )
+                                    
+                                    if direct_response.status_code == 200 and direct_response.content.startswith(b'%PDF'):
+                                        # Save the PDF from direct download
+                                        downloads_dir = Path(self.settings["FILES_STORE"])
+                                        downloads_dir.mkdir(exist_ok=True)
+                                        
+                                        pdf_filename = metadata["filename"]
+                                        pdf_path = downloads_dir / pdf_filename
+                                        
+                                        with open(pdf_path, 'wb') as f:
+                                            for chunk in direct_response.iter_content(chunk_size=8192):
+                                                if chunk:
+                                                    f.write(chunk)
+                                        
+                                        file_size = pdf_path.stat().st_size
+                                        self.logger.info(f"✅ PDF downloaded via direct request: {pdf_filename} ({file_size} bytes)")
+                                        
+                                        metadata["status"] = "downloaded_direct"
+                                        metadata["download_size"] = file_size
+                                        metadata["downloaded_at"] = datetime.now().isoformat()
+                                        self.save_individual_metadata(metadata)
+                                        return True
+                                    else:
+                                        self.logger.error(f"❌ Direct download also failed: {direct_response.status_code}")
+                                        
+                                except Exception as direct_error:
+                                    self.logger.error(f"❌ Direct download error: {direct_error}")
+                                
                                 metadata["status"] = "not_pdf_content"
                                 
                         except Exception as save_error:
