@@ -189,6 +189,9 @@ class DocSpider(scrapy.Spider):
             encoding='utf-8'
         )
         
+        # Add status code to the response
+        solved_response._set_url(solution["url"])
+        
         # Process the solved response
         yield from self.parse_content(solved_response)
 
@@ -213,6 +216,9 @@ class DocSpider(scrapy.Spider):
                 self.logger.error("This appears to be a generic forbidden error")
             
             return  # Don't process 403 responses further
+        
+        # Always save page content first
+        self.save_page_html_and_text(response)
         
         # Extract and save page text content
         page_text = self.extract_page_content(response)
@@ -656,6 +662,54 @@ class DocSpider(scrapy.Spider):
         # Save metadata with error status
         self.save_individual_metadata(metadata)
         return False
+    
+    def save_page_html_and_text(self, response):
+        """Save the full HTML and text content of any page visited"""
+        downloads_dir = Path(self.settings["FILES_STORE"])
+        downloads_dir.mkdir(exist_ok=True)
+        
+        # Create page directory
+        pages_dir = downloads_dir / "pages"
+        pages_dir.mkdir(exist_ok=True)
+        
+        # Generate filename from URL
+        import hashlib
+        url_hash = hashlib.sha1(response.url.encode()).hexdigest()
+        
+        # Save HTML
+        html_filename = f"page_{url_hash}.html"
+        html_path = pages_dir / html_filename
+        
+        with open(html_path, 'w', encoding='utf-8') as f:
+            f.write(response.text)
+        
+        # Save text content
+        text_filename = f"page_{url_hash}.txt"
+        text_path = pages_dir / text_filename
+        
+        page_text = self.extract_page_content(response)
+        with open(text_path, 'w', encoding='utf-8') as f:
+            f.write(page_text)
+        
+        # Save page metadata
+        page_metadata = {
+            "url": response.url,
+            "html_filename": html_filename,
+            "text_filename": text_filename,
+            "title": response.css('title::text').get() or "No title",
+            "status_code": response.status,
+            "scraped_at": datetime.now().isoformat(),
+            "html_size": len(response.text),
+            "text_size": len(page_text)
+        }
+        
+        metadata_filename = f"page_{url_hash}.json"
+        metadata_path = pages_dir / metadata_filename
+        
+        with open(metadata_path, 'w', encoding='utf-8') as f:
+            json.dump(page_metadata, f, indent=2, ensure_ascii=False)
+        
+        self.logger.info(f"📄 Saved page content: {response.url} -> {html_filename}")
     
     def extract_pdf_from_viewer(self, html_content, original_url):
         """Extract actual PDF URL from algori-pdf-viewer HTML"""
