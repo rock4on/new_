@@ -118,11 +118,21 @@ class DocSpider(scrapy.Spider):
             
             if result.get("status") == "ok":
                 solution = result.get("solution", {})
+                status_code = solution.get("status", 0)
+                response_text = solution.get("response", "")
+                
+                # Log the actual response for debugging
+                self.logger.info(f"FlareSolverr response status: {status_code}")
+                if status_code == 403:
+                    self.logger.error(f"403 Forbidden received. Response preview: {response_text[:500]}...")
+                    # Still return the response so we can analyze it
+                
                 return {
                     "url": solution.get("url"),
-                    "html": solution.get("response"),
+                    "html": response_text,
                     "cookies": solution.get("cookies", []),
-                    "user_agent": solution.get("userAgent")
+                    "user_agent": solution.get("userAgent"),
+                    "status_code": status_code
                 }
             else:
                 self.logger.error(f"FlareSolverr failed: {result.get('message', 'Unknown error')}")
