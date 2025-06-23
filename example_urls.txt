@@ -1,0 +1,13 @@
+# Example PDF URLs for batch downloading
+# Lines starting with # are comments and will be ignored
+
+# Add your PDF URLs here, one per line:
+# https://www.sec.gov.ph/wp-content/uploads/2023/document1.pdf
+# https://www.sec.gov.ph/wp-content/uploads/2023/document2.pdf
+# https://www.sec.gov.ph/viewer/document3.pdf
+
+# Example direct PDF link:
+# https://example.com/sample.pdf
+
+# Example PDF viewer page:
+# https://example.com/viewer?file=document.pdf
