@@ -221,6 +221,7 @@ class DocSpider(scrapy.Spider):
         pdf_count = 0
         link_count = 0
         
+        # Check for PDFs in regular links
         for href in response.css("a::attr(href)").getall():
             link_count += 1
             url = response.urljoin(href.strip())
@@ -228,37 +229,69 @@ class DocSpider(scrapy.Spider):
                 if PDF_RE.search(url):
                     pdf_count += 1
                     self.logger.info(f"📄 Found PDF #{pdf_count}: {url}")
-                    
-                    # Generate filename using same logic as FilesPipeline
-                    # This matches how Scrapy's FilesPipeline generates filenames
-                    url_hash = hashlib.sha1(url.encode()).hexdigest()
-                    scrapy_filename = f"{url_hash}.pdf"
-                    original_filename = url.split('/')[-1]
-                    if not original_filename.endswith('.pdf'):
-                        original_filename += '.pdf'
-                    
-                    metadata = {
-                        "filename": scrapy_filename,           # Actual file on disk
-                        "original_filename": original_filename, # Original from URL
-                        "pdf_url": url,
-                        "src_page": response.url,
-                        "title": href,
-                        "scraped_at": datetime.now().isoformat(),
-                        "status": "found"
-                    }
-                    self.pdf_metadata.append(metadata)
-                    
-                    # Save individual metadata file immediately
-                    self.save_individual_metadata(metadata)
-                    
-                    yield DocItem(
-                        file_urls=[url],
-                        src_page=response.url,
-                        title=href,     # Store original link text
-                        pdf_url=url     # Store PDF URL for LLM
+                    yield from self.create_pdf_item(url, response.url, href)
+        
+        # Check for PDFs in iframes
+        iframe_urls = response.css("iframe::attr(src)").getall()
+        for iframe_src in iframe_urls:
+            iframe_url = response.urljoin(iframe_src.strip())
+            if PDF_RE.search(iframe_url):
+                pdf_count += 1
+                self.logger.info(f"📄 Found PDF in iframe #{pdf_count}: {iframe_url}")
+                yield from self.create_pdf_item(iframe_url, response.url, f"iframe: {iframe_src}")
+            elif self.allowed_domains[0] in iframe_url and self.is_url_allowed(iframe_url):
+                # Process iframe content to look for PDFs
+                self.logger.info(f"🔍 Processing iframe: {iframe_url}")
+                solution = self.solve_cloudflare(iframe_url)
+                if solution:
+                    yield scrapy.Request(
+                        solution["url"],
+                        meta={
+                            "flaresolverr_solution": solution,
+                            "dont_cache": True,
+                            "is_iframe": True
+                        },
+                        callback=self.parse_flaresolverr_response,
+                        dont_filter=True
                     )
-                else:
-                    # Follow links - try FlareSolverr for potential Cloudflare pages
+        
+        # Check for PDFs in embed tags
+        embed_urls = response.css("embed::attr(src)").getall()
+        for embed_src in embed_urls:
+            embed_url = response.urljoin(embed_src.strip())
+            if PDF_RE.search(embed_url):
+                pdf_count += 1
+                self.logger.info(f"📄 Found PDF in embed #{pdf_count}: {embed_url}")
+                yield from self.create_pdf_item(embed_url, response.url, f"embed: {embed_src}")
+        
+        # Check for PDFs in object tags
+        object_urls = response.css("object::attr(data)").getall()
+        for object_data in object_urls:
+            object_url = response.urljoin(object_data.strip())
+            if PDF_RE.search(object_url):
+                pdf_count += 1
+                self.logger.info(f"📄 Found PDF in object #{pdf_count}: {object_url}")
+                yield from self.create_pdf_item(object_url, response.url, f"object: {object_data}")
+        
+        # Look for JavaScript-loaded PDFs
+        script_texts = response.css("script::text").getall()
+        for script in script_texts:
+            # Look for PDF URLs in JavaScript
+            import re
+            pdf_matches = re.findall(r'["\']([^"\']*\.pdf[^"\']*)["\']', script, re.IGNORECASE)
+            for pdf_match in pdf_matches:
+                pdf_url = response.urljoin(pdf_match)
+                if self.allowed_domains[0] in pdf_url and self.is_url_allowed(pdf_url):
+                    pdf_count += 1
+                    self.logger.info(f"📄 Found PDF in JavaScript #{pdf_count}: {pdf_url}")
+                    yield from self.create_pdf_item(pdf_url, response.url, f"javascript: {pdf_match}")
+        
+        # Continue with regular link following for non-PDF links
+        for href in response.css("a::attr(href)").getall():
+            url = response.urljoin(href.strip())
+            if self.allowed_domains[0] in url and self.is_url_allowed(url):
+                if not PDF_RE.search(url):
+                    # Follow non-PDF links - try FlareSolverr for potential Cloudflare pages
                     solution = self.solve_cloudflare(url)
                     if solution:
                         yield scrapy.Request(
@@ -275,6 +308,36 @@ class DocSpider(scrapy.Spider):
                         yield scrapy.Request(url, callback=self.parse)
         
         self.logger.info(f"📊 Page {response.url}: Found {pdf_count} PDFs out of {link_count} links")
+    
+    def create_pdf_item(self, pdf_url, src_page, title):
+        """Create a PDF item for download"""
+        # Generate filename using same logic as FilesPipeline
+        url_hash = hashlib.sha1(pdf_url.encode()).hexdigest()
+        scrapy_filename = f"{url_hash}.pdf"
+        original_filename = pdf_url.split('/')[-1]
+        if not original_filename.endswith('.pdf'):
+            original_filename += '.pdf'
+        
+        metadata = {
+            "filename": scrapy_filename,           # Actual file on disk
+            "original_filename": original_filename, # Original from URL
+            "pdf_url": pdf_url,
+            "src_page": src_page,
+            "title": title,
+            "scraped_at": datetime.now().isoformat(),
+            "status": "found"
+        }
+        self.pdf_metadata.append(metadata)
+        
+        # Save individual metadata file immediately
+        self.save_individual_metadata(metadata)
+        
+        yield DocItem(
+            file_urls=[pdf_url],
+            src_page=src_page,
+            title=title,     # Store original link text
+            pdf_url=pdf_url  # Store PDF URL for LLM
+        )
     
     def extract_page_content(self, response):
         """Extract meaningful text content from web page"""
