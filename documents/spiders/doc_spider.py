@@ -401,28 +401,40 @@ class DocSpider(scrapy.Spider):
                     # Check if we have content
                     if response_content and len(response_content) > 1000:
                         try:
-                            # Check if this is HTML content instead of PDF
+                            # Check if this is HTML content with PDF viewer
                             if '<html' in response_content.lower() or '<!doctype' in response_content.lower():
-                                self.logger.info(f"📄 Received HTML content instead of PDF - saving as HTML")
+                                self.logger.info(f"📄 Received HTML with PDF viewer - extracting actual PDF URL")
                                 
-                                # Save as HTML file
+                                # Save HTML for debugging
                                 downloads_dir = Path(self.settings["FILES_STORE"])
                                 downloads_dir.mkdir(exist_ok=True)
-                                
-                                # Create HTML filename
-                                html_filename = metadata["filename"].replace('.pdf', '.html')
+                                html_filename = metadata["filename"].replace('.pdf', '_viewer.html')
                                 html_path = downloads_dir / html_filename
                                 
                                 with open(html_path, 'w', encoding='utf-8') as f:
                                     f.write(response_content)
                                 
-                                file_size = html_path.stat().st_size
-                                self.logger.info(f"✅ HTML content saved: {html_filename} ({file_size} bytes)")
+                                # Try to extract the actual PDF URL from the HTML
+                                actual_pdf_url = self.extract_pdf_from_viewer(response_content, pdf_url)
                                 
-                                # Update metadata
-                                metadata["status"] = "downloaded_html"
+                                if actual_pdf_url and actual_pdf_url != pdf_url:
+                                    self.logger.info(f"🔍 Found actual PDF URL: {actual_pdf_url}")
+                                    
+                                    # Try to download the actual PDF
+                                    metadata["original_pdf_url"] = pdf_url
+                                    metadata["actual_pdf_url"] = actual_pdf_url
+                                    
+                                    return self.download_actual_pdf(actual_pdf_url, metadata)
+                                else:
+                                    # Use JavaScript execution to wait for PDF to load
+                                    self.logger.info(f"🔄 Using JavaScript execution to load PDF viewer")
+                                    return self.download_pdf_with_js_execution(pdf_url, metadata)
+                                
+                                # Fallback: save as HTML
+                                self.logger.info(f"📄 Saving PDF viewer HTML as fallback")
+                                metadata["status"] = "downloaded_viewer_html"
                                 metadata["filename"] = html_filename
-                                metadata["download_size"] = file_size
+                                metadata["download_size"] = html_path.stat().st_size
                                 metadata["downloaded_at"] = datetime.now().isoformat()
                                 metadata["content_type"] = "text/html"
                                 
@@ -578,6 +590,158 @@ class DocSpider(scrapy.Spider):
         self.save_individual_metadata(metadata)
         return False
     
+    def extract_pdf_from_viewer(self, html_content, original_url):
+        """Extract actual PDF URL from algori-pdf-viewer HTML"""
+        import re
+        
+        # Common patterns for PDF URLs in viewers
+        patterns = [
+            r'data-src=["\']([^"\']*\.pdf[^"\']*)["\']',  # data-src attribute
+            r'src=["\']([^"\']*\.pdf[^"\']*)["\']',       # src attribute
+            r'file=["\']([^"\']*\.pdf[^"\']*)["\']',      # file attribute
+            r'url=["\']([^"\']*\.pdf[^"\']*)["\']',       # url parameter
+            r'["\']([^"\']*\.pdf[^"\']*)["\']',           # any PDF URL in quotes
+            r'pdfUrl\s*[:=]\s*["\']([^"\']*)["\']',      # pdfUrl variable
+            r'pdf_url\s*[:=]\s*["\']([^"\']*)["\']',     # pdf_url variable
+        ]
+        
+        for pattern in patterns:
+            matches = re.findall(pattern, html_content, re.IGNORECASE)
+            for match in matches:
+                if match and match != original_url:
+                    # Convert relative URLs to absolute
+                    if match.startswith('/'):
+                        from urllib.parse import urljoin, urlparse
+                        parsed_original = urlparse(original_url)
+                        base_url = f"{parsed_original.scheme}://{parsed_original.netloc}"
+                        full_url = urljoin(base_url, match)
+                        return full_url
+                    elif match.startswith('http'):
+                        return match
+        
+        return None
+    
+    def download_actual_pdf(self, pdf_url, metadata):
+        """Download the actual PDF URL found in viewer"""
+        self.logger.info(f"📥 Downloading actual PDF: {pdf_url}")
+        
+        try:
+            # Use FlareSolverr to download the actual PDF
+            solution = self.solve_cloudflare(pdf_url)
+            
+            if solution and solution.get("status_code") == 200:
+                cookies = solution.get("cookies", [])
+                cookie_dict = {cookie["name"]: cookie["value"] for cookie in cookies}
+                user_agent = solution.get("userAgent", self.current_ua)
+                
+                import requests
+                pdf_response = requests.get(
+                    pdf_url,
+                    cookies=cookie_dict,
+                    headers={
+                        "User-Agent": user_agent,
+                        "Accept": "application/pdf,application/octet-stream,*/*",
+                        "Referer": metadata.get("src_page", ""),
+                    },
+                    timeout=120,
+                    stream=True
+                )
+                
+                if pdf_response.status_code == 200 and pdf_response.content.startswith(b'%PDF'):
+                    # Save the actual PDF
+                    downloads_dir = Path(self.settings["FILES_STORE"])
+                    downloads_dir.mkdir(exist_ok=True)
+                    
+                    pdf_filename = metadata["filename"]
+                    pdf_path = downloads_dir / pdf_filename
+                    
+                    with open(pdf_path, 'wb') as f:
+                        for chunk in pdf_response.iter_content(chunk_size=8192):
+                            if chunk:
+                                f.write(chunk)
+                    
+                    file_size = pdf_path.stat().st_size
+                    self.logger.info(f"✅ Actual PDF downloaded: {pdf_filename} ({file_size} bytes)")
+                    
+                    metadata["status"] = "downloaded_actual_pdf"
+                    metadata["download_size"] = file_size
+                    metadata["downloaded_at"] = datetime.now().isoformat()
+                    
+                    self.save_individual_metadata(metadata)
+                    return True
+                    
+        except Exception as e:
+            self.logger.error(f"❌ Error downloading actual PDF: {e}")
+            
+        return False
+    
+    def download_pdf_with_js_execution(self, pdf_url, metadata):
+        """Use FlareSolverr with JavaScript execution to handle PDF viewer"""
+        self.logger.info(f"📥 Downloading PDF with JavaScript execution: {pdf_url}")
+        
+        try:
+            import random
+            import time
+            
+            # Enhanced FlareSolverr payload with JavaScript execution
+            payload = {
+                "cmd": "request.get",
+                "url": pdf_url,
+                "maxTimeout": 180000,  # 3 minutes for JS execution
+                "headers": {
+                    "User-Agent": random.choice(self.user_agents),
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Referer": metadata.get("src_page", "https://www.sec.gov.ph/"),
+                },
+                "session": f"pdf_js_session_{random.randint(1000, 9999)}",
+                "returnOnlyCookies": False,
+                # Add wait for PDF to load
+                "postData": {
+                    "wait": 10000,  # Wait 10 seconds for JS to execute
+                    "waitUntil": "networkidle0"  # Wait until network is idle
+                }
+            }
+            
+            response = requests.post(self.flaresolverr_url, json=payload, timeout=200)
+            response.raise_for_status()
+            result = response.json()
+            
+            if result.get("status") == "ok":
+                solution = result.get("solution", {})
+                html_content = solution.get("response", "")
+                
+                # Try to extract PDF URL from the loaded page
+                actual_pdf_url = self.extract_pdf_from_viewer(html_content, pdf_url)
+                
+                if actual_pdf_url:
+                    self.logger.info(f"🔍 Found PDF URL after JS execution: {actual_pdf_url}")
+                    metadata["js_extracted_url"] = actual_pdf_url
+                    return self.download_actual_pdf(actual_pdf_url, metadata)
+                else:
+                    # Save the viewer HTML as fallback
+                    self.logger.info(f"📄 Saving JS-executed viewer HTML")
+                    downloads_dir = Path(self.settings["FILES_STORE"])
+                    downloads_dir.mkdir(exist_ok=True)
+                    
+                    html_filename = metadata["filename"].replace('.pdf', '_js_viewer.html')
+                    html_path = downloads_dir / html_filename
+                    
+                    with open(html_path, 'w', encoding='utf-8') as f:
+                        f.write(html_content)
+                    
+                    metadata["status"] = "downloaded_js_viewer_html"
+                    metadata["filename"] = html_filename
+                    metadata["download_size"] = html_path.stat().st_size
+                    metadata["downloaded_at"] = datetime.now().isoformat()
+                    
+                    self.save_individual_metadata(metadata)
+                    return True
+                    
+        except Exception as e:
+            self.logger.error(f"❌ Error with JS execution: {e}")
+            
+        return False
     
     def extract_page_content(self, response):
         """Extract meaningful text content from web page"""
