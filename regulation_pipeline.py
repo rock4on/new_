@@ -118,6 +118,23 @@ class RegulationPipeline:
         country_dir.mkdir(exist_ok=True)
         
         reg_output_dir = country_dir / safe_reg_name
+        
+        # Check if regulation folder already exists and has content
+        if reg_output_dir.exists():
+            existing_files = list(reg_output_dir.glob('*'))
+            if len(existing_files) > 1:  # More than just the regulation_info.json
+                print(f"⏭️  SKIPPING: [{country}] {reg_name} - Folder already exists with {len(existing_files)} files")
+                return {
+                    'regulation_name': reg_name,
+                    'country': country,
+                    'status': 'skipped_existing',
+                    'scraping_duration': 0,
+                    'output_folder': str(reg_output_dir),
+                    'country_folder': str(country_dir),
+                    'scraped_content_count': self.count_scraped_content(reg_output_dir),
+                    'error_message': 'Folder already exists with content'
+                }
+        
         reg_output_dir.mkdir(exist_ok=True)
         
         # Save regulation info
@@ -301,6 +318,7 @@ class RegulationPipeline:
         
         # Calculate statistics
         completed_count = sum(1 for r in self.results if r['status'] == 'completed')
+        skipped_count = sum(1 for r in self.results if r['status'] == 'skipped_existing')
         failed_count = sum(1 for r in self.results if r['status'] in ['failed', 'error', 'timeout'])
         total_files_scraped = 0
         
@@ -314,8 +332,10 @@ class RegulationPipeline:
                 'excel_file': str(self.excel_file),
                 'total_regulations': len(self.regulations),
                 'completed_regulations': completed_count,
+                'skipped_regulations': skipped_count,
                 'failed_regulations': failed_count,
                 'success_rate': f"{(completed_count/len(self.regulations)*100):.1f}%" if self.regulations else "0%",
+                'skip_rate': f"{(skipped_count/len(self.regulations)*100):.1f}%" if self.regulations else "0%",
                 'total_files_scraped': total_files_scraped,
                 'pipeline_started_at': self.pipeline_start_time.isoformat(),
                 'pipeline_completed_at': pipeline_end_time.isoformat(),

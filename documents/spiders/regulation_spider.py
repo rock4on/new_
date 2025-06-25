@@ -181,7 +181,10 @@ class RegulationSpider(scrapy.Spider):
         # Handle error responses
         if response.status == 403:
             self.logger.warning(f"🚫 403 Forbidden: {response.url}")
-            self.handle_403_error(response)
+            if self.handle_403_error(response):
+                self.logger.info(f"✅ 403 error handled successfully with FlareSolverr")
+            else:
+                self.logger.error(f"❌ Failed to handle 403 error for: {response.url}")
             return
         elif response.status >= 400:
             self.logger.warning(f"❌ HTTP {response.status}: {response.url}")
@@ -556,10 +559,14 @@ class RegulationSpider(scrapy.Spider):
         self.logger.error(f"❌ REQUEST FAILED: {failure.request.url}")
         self.logger.error(f"   Error: {failure.value}")
         
-        # TODO: Add FlareSolverr fallback here for 403 errors
+        # Handle 403 errors with FlareSolverr fallback
         if hasattr(failure.value, 'response') and failure.value.response:
             if failure.value.response.status == 403:
-                self.logger.info(f"🔄 Could try FlareSolverr fallback for: {failure.request.url}")
+                self.logger.info(f"🔄 Trying FlareSolverr fallback for 403 error: {failure.request.url}")
+                if self.download_html_with_flaresolverr(failure.request.url):
+                    self.logger.info(f"✅ FlareSolverr fallback successful for: {failure.request.url}")
+                else:
+                    self.logger.error(f"❌ FlareSolverr fallback failed for: {failure.request.url}")
     
     def download_pdf_with_flaresolverr(self, pdf_url, source_page):
         """Download PDF using FlareSolverr"""
@@ -618,10 +625,160 @@ class RegulationSpider(scrapy.Spider):
             return False
     
     def handle_403_error(self, response):
-        """Handle 403 errors"""
+        """Handle 403 errors with HTML downloader fallback"""
         self.logger.warning(f"🚫 403 error for: {response.url}")
-        # FlareSolverr fallback is now implemented above
-        self.logger.info("🔄 FlareSolverr fallback implemented for PDFs")
+        
+        try:
+            # Use HTML downloader for 403 errors
+            if self.download_html_with_flaresolverr(response.url):
+                self.logger.info(f"✅ HTML downloaded via FlareSolverr for 403 error")
+                return True
+            else:
+                self.logger.error(f"❌ FlareSolverr HTML download failed for 403 error")
+                return False
+        except Exception as e:
+            self.logger.error(f"❌ Error handling 403 with FlareSolverr: {e}")
+            return False
+    
+    def download_html_with_flaresolverr(self, html_url):
+        """Download HTML using FlareSolverr for 403 errors"""
+        try:
+            import sys
+            sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+            from html_downloader import HTMLDownloader
+            
+            downloader = HTMLDownloader()
+            url_hash = hashlib.md5(html_url.encode()).hexdigest()[:8]
+            safe_name = self.make_safe_filename(self.regulation_name)
+            timestamp = datetime.now().strftime("%H%M%S")
+            filename = f"{safe_name}_403_{self.pages_crawled:03d}_{url_hash}_{timestamp}"
+            
+            # Change to our output directory temporarily
+            import os
+            original_cwd = os.getcwd()
+            os.chdir(self.output_folder.parent)
+            
+            try:
+                success = downloader.download_html(html_url, filename)
+                
+                if success:
+                    # Move the downloaded files to our output folder
+                    downloaded_html = Path("downloads") / f"{filename}.html"
+                    downloaded_txt = Path("downloads") / f"{filename}.txt"
+                    downloaded_meta = Path("downloads") / f"{filename}_metadata.json"
+                    
+                    target_html = self.output_folder / f"{filename}.html"
+                    target_txt = self.output_folder / f"{filename}.txt"
+                    target_meta = self.output_folder / f"{filename}_metadata.json"
+                    
+                    # Move files if they exist
+                    if downloaded_html.exists():
+                        downloaded_html.rename(target_html)
+                        self.logger.info(f"💾 SAVED HTML via FlareSolverr: {target_html.name}")
+                    
+                    if downloaded_txt.exists():
+                        downloaded_txt.rename(target_txt)
+                        self.logger.info(f"💾 SAVED TEXT via FlareSolverr: {target_txt.name}")
+                    
+                    if downloaded_meta.exists():
+                        # Update metadata with our regulation info
+                        try:
+                            with open(downloaded_meta, 'r', encoding='utf-8') as f:
+                                metadata = json.load(f)
+                            
+                            metadata.update({
+                                'regulation': self.regulation_name,
+                                'country': self.country,
+                                'method': 'flaresolverr_403_fallback',
+                                'original_status': '403_forbidden'
+                            })
+                            
+                            with open(target_meta, 'w', encoding='utf-8') as f:
+                                json.dump(metadata, f, indent=2, ensure_ascii=False)
+                                
+                            downloaded_meta.unlink()  # Remove original
+                            
+                        except Exception as meta_error:
+                            self.logger.warning(f"⚠️  Could not update metadata: {meta_error}")
+                            if downloaded_meta.exists():
+                                downloaded_meta.rename(target_meta)
+                    
+                    # Update our tracking
+                    self.pages_crawled += 1
+                    self.scraped_items.append({
+                        'url': html_url,
+                        'regulation': self.regulation_name,
+                        'country': self.country,
+                        'method': 'flaresolverr_403_fallback',
+                        'files': [str(target_html), str(target_txt), str(target_meta)]
+                    })
+                    
+                    # Try to extract links from the downloaded HTML for further crawling
+                    if target_html.exists():
+                        self.process_downloaded_html_for_links(target_html, html_url)
+                    
+                    return True
+                
+                return False
+                
+            finally:
+                os.chdir(original_cwd)
+                
+        except Exception as e:
+            self.logger.error(f"❌ FlareSolverr HTML download error: {e}")
+            return False
+    
+    def process_downloaded_html_for_links(self, html_file, original_url):
+        """Process downloaded HTML file to extract links for further crawling"""
+        try:
+            with open(html_file, 'r', encoding='utf-8') as f:
+                html_content = f.read()
+            
+            # Create a mock response for link extraction
+            from scrapy.http import HtmlResponse
+            response = HtmlResponse(
+                url=original_url,
+                body=html_content.encode('utf-8'),
+                encoding='utf-8'
+            )
+            
+            self.logger.info(f"🔍 Processing downloaded HTML for links: {html_file.name}")
+            
+            # Extract PDFs from the downloaded content
+            self.extract_and_save_pdfs(response)
+            
+            # Follow links if we haven't reached depth limit
+            current_depth = 1  # Assume this is depth 1 since it's a fallback
+            depth_limit = getattr(self, 'custom_settings', {}).get('DEPTH_LIMIT', 3)
+            
+            if current_depth < depth_limit:
+                self.logger.info(f"🔗 Following links from FlareSolverr downloaded page")
+                # Process links but don't yield directly, instead queue them
+                all_links = response.css('a::attr(href)').getall()
+                
+                valid_links = []
+                for link in all_links:
+                    if not link:
+                        continue
+                    
+                    from urllib.parse import urljoin
+                    url = urljoin(original_url, link.strip())
+                    
+                    # Skip PDF links and check domain
+                    if not self.pdf_pattern.search(url) and self.is_allowed_url(url):
+                        valid_links.append(url)
+                
+                # Log the links we found
+                if valid_links:
+                    self.logger.info(f"🔗 Found {len(valid_links)} valid links in FlareSolverr downloaded page")
+                    for i, url in enumerate(valid_links[:5]):  # Log first 5
+                        self.logger.info(f"   Link {i+1}: {url}")
+                    
+                    # Note: We could implement a queue system here to process these links
+                    # For now, just log them as potential follow-up URLs
+                    
+        except Exception as e:
+            self.logger.error(f"❌ Error processing downloaded HTML for links: {e}")
     
     def closed(self, reason):
         """Called when spider closes - save comprehensive summary"""
