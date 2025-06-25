@@ -68,17 +68,18 @@ DEFAULT_MODEL = "gpt-4o-mini"
 DEFAULT_CONFIDENCE_THRESHOLD = 0.7
 DEFAULT_INPUT_DIR = "regulation_scraping_results"
 DEFAULT_OUTPUT_DIR = "regulation_analysis_results"
-DEFAULT_CHUNK_SIZE = 4000
+DEFAULT_MAX_PAGES_PDF = None  # None = all pages, or set to number like 10
+DEFAULT_MAX_CHARS_TEXT = 15000  # Maximum characters per document for LLM processing
 DEFAULT_MAX_WORKERS = 3
 RELEVANCE_CRITERIA = "financial regulations, compliance requirements, ESG regulations, tax regulations, and legal disclosure requirements"
 
 
 class RegulationProcessor:
     def __init__(self, input_dir: str = DEFAULT_INPUT_DIR, output_dir: str = DEFAULT_OUTPUT_DIR, 
-                 api_key: str = None, base_url: str = None, chunk_size: int = 4000):
+                 api_key: str = None, base_url: str = None, max_chars: int = DEFAULT_MAX_CHARS_TEXT):
         self.input_dir = Path(input_dir)
         self.output_dir = Path(output_dir)
-        self.chunk_size = chunk_size
+        self.max_chars = max_chars
         
         # Create output directory
         self.output_dir.mkdir(exist_ok=True)
@@ -130,21 +131,15 @@ INSTRUCTIONS:
         self.html_converter.ignore_links = False
         self.html_converter.ignore_images = True
     
-    def extract_pdf_text(self, pdf_path: Path, max_pages: int = None) -> str:
-        """Extract text from PDF - all pages if max_pages=None, otherwise first max_pages"""
+    def extract_pdf_text(self, pdf_path: Path) -> str:
+        """Extract text from entire PDF document"""
         try:
             with open(pdf_path, 'rb') as file:
                 reader = PyPDF2.PdfReader(file)
                 text = ""
                 
-                # Determine pages to extract
-                if max_pages is None:
-                    pages_to_extract = reader.pages
-                else:
-                    pages_to_extract = reader.pages[:max_pages]
-                
-                # Extract text from selected pages
-                for page in pages_to_extract:
+                # Extract text from all pages
+                for page in reader.pages:
                     page_text = page.extract_text()
                     if page_text:
                         text += page_text + "\n"
@@ -189,40 +184,10 @@ INSTRUCTIONS:
             print(f"Error reading text from {text_path}: {e}")
             return ""
     
-    def chunk_text(self, text: str, chunk_size: int = None) -> List[str]:
-        """Split text into manageable chunks"""
-        if chunk_size is None:
-            chunk_size = self.chunk_size
-        
-        if len(text) <= chunk_size:
-            return [text]
-        
-        chunks = []
-        # Try to split on sentences first
-        sentences = re.split(r'(?<=[.!?])\s+', text)
-        current_chunk = ""
-        
-        for sentence in sentences:
-            if len(current_chunk) + len(sentence) <= chunk_size:
-                current_chunk += sentence + " "
-            else:
-                if current_chunk:
-                    chunks.append(current_chunk.strip())
-                current_chunk = sentence + " "
-        
-        if current_chunk:
-            chunks.append(current_chunk.strip())
-        
-        return chunks if chunks else [text[:chunk_size]]
-    
-    def analyze_document_chunk(self, document_text: str, relevance_criteria: str, 
-                              country: str, regulation_name: str, source_url: str, 
-                              filename: str, model: str = DEFAULT_MODEL) -> Dict[str, Any]:
-        """Use LangChain LLM to analyze a document chunk"""
-        
-        # Truncate text if too long
-        if len(document_text) > 8000:
-            document_text = document_text[:8000] + "...[truncated]"
+    def analyze_complete_document(self, document_text: str, relevance_criteria: str, 
+                                 country: str, regulation_name: str, source_url: str, 
+                                 filename: str, file_type: str, model: str = DEFAULT_MODEL) -> Dict[str, Any]:
+        """Analyze a complete document with full context preservation"""
         
         # Update model if different from default
         if model != DEFAULT_MODEL:
@@ -241,6 +206,22 @@ INSTRUCTIONS:
                 "format_instructions": self.parser.get_format_instructions()
             })
             
+            # Add document metadata
+            result.update({
+                "document_metadata": {
+                    "filename": filename,
+                    "file_type": file_type,
+                    "text_length": len(document_text),
+                    "word_count": len(document_text.split()),
+                    "processed_at": datetime.now().isoformat()
+                },
+                "regulation_context": {
+                    "regulation_name": regulation_name,
+                    "country": country,
+                    "source_url": source_url
+                }
+            })
+            
             # Ensure metadata fields are populated
             if not result.get("last_scraped"):
                 result["last_scraped"] = current_date
@@ -252,7 +233,7 @@ INSTRUCTIONS:
             return result
             
         except Exception as e:
-            print(f"Error analyzing document chunk: {e}")
+            print(f"Error analyzing document: {e}")
             current_date = datetime.now().strftime("%Y-%m-%d")
             return {
                 "relevant": False,
@@ -279,8 +260,20 @@ INSTRUCTIONS:
                 "translated_flag": False,
                 "source_url": source_url,
                 "last_scraped": current_date,
-                "change_detected": False
+                "change_detected": False,
+                "document_metadata": {
+                    "filename": filename,
+                    "file_type": file_type,
+                    "text_length": len(document_text) if document_text else 0,
+                    "error": str(e)
+                },
+                "regulation_context": {
+                    "regulation_name": regulation_name,
+                    "country": country,
+                    "source_url": source_url
+                }
             }
+    
     
     def load_regulation_info(self, regulation_folder: Path) -> Dict[str, Any]:
         """Load regulation info from regulation_info.json"""
@@ -296,7 +289,7 @@ INSTRUCTIONS:
     def process_regulation_folder(self, country: str, regulation_folder: Path, 
                                  relevance_criteria: str, confidence_threshold: float, 
                                  model: str) -> Dict[str, Any]:
-        """Process all documents in a regulation folder"""
+        """Process all documents in a regulation folder - one document per LLM call"""
         
         print(f"\n🔄 Processing: [{country}] {regulation_folder.name}")
         
@@ -317,114 +310,220 @@ INSTRUCTIONS:
         
         print(f"  Found {len(all_files)} documents ({len(pdf_files)} PDFs, {len(html_files)} HTML, {len(txt_files)} TXT)")
         
-        # Process each file and collect chunks
-        all_chunks = []
-        file_metadata = {}
-        
-        for doc_file in all_files:
-            # Extract text based on file type
-            if doc_file.suffix.lower() == '.pdf':
-                text = self.extract_pdf_text(doc_file)
-            elif doc_file.suffix.lower() == '.html':
-                text = self.extract_html_text(doc_file)
-            elif doc_file.suffix.lower() == '.txt':
-                text = self.extract_text_file(doc_file)
-            else:
-                continue
-            
-            if not text:
-                continue
-            
-            # Chunk the text
-            chunks = self.chunk_text(text)
-            
-            for i, chunk in enumerate(chunks):
-                chunk_info = {
-                    'text': chunk,
-                    'source_file': doc_file.name,
-                    'source_path': str(doc_file),
-                    'chunk_index': i,
-                    'total_chunks': len(chunks),
-                    'file_type': doc_file.suffix.lower(),
-                    'regulation_name': regulation_name,
-                    'country': country
-                }
-                all_chunks.append(chunk_info)
-            
-            file_metadata[doc_file.name] = {
-                'file_size': doc_file.stat().st_size,
-                'text_length': len(text),
-                'chunk_count': len(chunks),
-                'file_type': doc_file.suffix.lower()
-            }
-        
-        if not all_chunks:
-            print(f"  No text content extracted from documents")
-            return None
-        
-        print(f"  Created {len(all_chunks)} chunks for analysis")
-        
-        # Analyze chunks in parallel
-        relevant_analyses = []
+        # Process each document completely
+        document_analyses = []
         
         with ThreadPoolExecutor(max_workers=DEFAULT_MAX_WORKERS) as executor:
-            future_to_chunk = {
-                executor.submit(
-                    self.analyze_document_chunk,
-                    chunk['text'],
+            future_to_file = {}
+            
+            # Submit all document processing tasks
+            for doc_file in all_files:
+                # Extract text based on file type
+                if doc_file.suffix.lower() == '.pdf':
+                    text = self.extract_pdf_text(doc_file)
+                    file_type = 'pdf'
+                elif doc_file.suffix.lower() == '.html':
+                    text = self.extract_html_text(doc_file)
+                    file_type = 'html'
+                elif doc_file.suffix.lower() == '.txt':
+                    text = self.extract_text_file(doc_file)
+                    file_type = 'txt'
+                else:
+                    continue
+                
+                if not text:
+                    print(f"    ⚠️  No text extracted from {doc_file.name}")
+                    continue
+                
+                # Submit complete document analysis
+                future = executor.submit(
+                    self.analyze_complete_document,
+                    text,
                     relevance_criteria,
                     country,
                     regulation_name,
                     reg_info.get('urls', ['Unknown'])[0] if reg_info.get('urls') else 'Unknown',
-                    f"{chunk['source_file']}_chunk_{chunk['chunk_index']}",
+                    doc_file.name,
+                    file_type,
                     model
-                ): chunk for chunk in all_chunks
-            }
+                )
+                future_to_file[future] = {
+                    'file': doc_file,
+                    'text': text,
+                    'file_type': file_type
+                }
             
-            for future in as_completed(future_to_chunk):
-                chunk = future_to_chunk[future]
+            # Collect results as they complete
+            for future in as_completed(future_to_file):
+                file_info = future_to_file[future]
+                doc_file = file_info['file']
+                
                 try:
                     analysis = future.result()
+                    
                     if analysis and analysis.get('relevant') and analysis.get('confidence', 0) >= confidence_threshold:
-                        # Add chunk metadata
-                        analysis.update({
-                            'chunk_info': {
-                                'source_file': chunk['source_file'],
-                                'chunk_index': chunk['chunk_index'],
-                                'total_chunks': chunk['total_chunks'],
-                                'file_type': chunk['file_type']
-                            },
-                            'regulation_folder': regulation_folder.name,
-                            'processed_at': datetime.now().isoformat()
-                        })
-                        relevant_analyses.append(analysis)
-                        print(f"    ✅ Relevant chunk: {chunk['source_file']} (chunk {chunk['chunk_index']}/{chunk['total_chunks']})")
+                        document_analyses.append(analysis)
+                        print(f"    ✅ RELEVANT: {doc_file.name} ({analysis['confidence']:.2f}) - {analysis.get('tag', 'Unknown')}")
+                        print(f"        Summary: {analysis.get('summary', 'No summary')[:100]}...")
+                        
+                        # Save individual document analysis immediately
+                        self._save_individual_document_analysis(country, regulation_name, analysis)
                     else:
-                        print(f"    ❌ Irrelevant: {chunk['source_file']} (chunk {chunk['chunk_index']}/{chunk['total_chunks']})")
+                        confidence = analysis.get('confidence', 0) if analysis else 0
+                        print(f"    ❌ IRRELEVANT: {doc_file.name} ({confidence:.2f})")
                         
                 except Exception as e:
-                    print(f"    Error processing chunk from {chunk['source_file']}: {e}")
+                    print(f"    💥 ERROR processing {doc_file.name}: {e}")
         
-        if not relevant_analyses:
-            print(f"  No relevant content found")
+        if not document_analyses:
+            print(f"  No relevant documents found")
             return None
         
-        # Create summary result
+        # Create comprehensive result
         result = {
             'country': country,
             'regulation_name': regulation_name,
             'regulation_folder': regulation_folder.name,
             'total_documents': len(all_files),
-            'total_chunks_analyzed': len(all_chunks),
-            'relevant_chunks_found': len(relevant_analyses),
-            'file_metadata': file_metadata,
+            'relevant_documents_found': len(document_analyses),
             'regulation_info': reg_info,
-            'relevant_analyses': relevant_analyses,
-            'processed_at': datetime.now().isoformat()
+            'document_analyses': document_analyses,
+            'processed_at': datetime.now().isoformat(),
+            'summary_statistics': self._create_regulation_summary(document_analyses)
         }
         
-        print(f"  ✅ Found {len(relevant_analyses)} relevant chunks out of {len(all_chunks)} total")
+        print(f"  ✅ Found {len(document_analyses)} relevant documents out of {len(all_files)} total")
+        
+        # Save regulation summary immediately
+        self._save_regulation_summary(country, result)
+        
         return result
+    
+    def _save_individual_document_analysis(self, country: str, regulation_name: str, analysis: Dict[str, Any]):
+        """Save individual document analysis immediately after processing"""
+        try:
+            # Create country and regulation folders
+            country_output_dir = self.output_dir / self.safe_folder_name(country)
+            country_output_dir.mkdir(exist_ok=True)
+            
+            safe_reg_name = self.safe_folder_name(regulation_name)
+            reg_folder = country_output_dir / safe_reg_name
+            reg_folder.mkdir(exist_ok=True)
+            
+            # Create filename for the document analysis
+            doc_filename = analysis.get('document_metadata', {}).get('filename', 'unknown_document')
+            safe_filename = self.safe_folder_name(doc_filename.replace('.', '_'))
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            doc_file = reg_folder / f"{safe_filename}_{timestamp}_analysis.json"
+            
+            # Add save timestamp to analysis
+            analysis['saved_at'] = datetime.now().isoformat()
+            
+            # Save the analysis
+            with open(doc_file, 'w', encoding='utf-8') as f:
+                json.dump(analysis, f, indent=2, ensure_ascii=False)
+            
+            print(f"        💾 Saved: {doc_file.name}")
+            
+        except Exception as e:
+            print(f"        ⚠️  Error saving document analysis: {e}")
+    
+    def _save_regulation_summary(self, country: str, regulation_result: Dict[str, Any]):
+        """Save regulation summary immediately after processing all documents in regulation"""
+        try:
+            # Create country and regulation folders
+            country_output_dir = self.output_dir / self.safe_folder_name(country)
+            country_output_dir.mkdir(exist_ok=True)
+            
+            regulation_name = regulation_result['regulation_name']
+            safe_reg_name = self.safe_folder_name(regulation_name)
+            reg_folder = country_output_dir / safe_reg_name
+            reg_folder.mkdir(exist_ok=True)
+            
+            # Save regulation summary
+            reg_summary_file = reg_folder / "regulation_summary.json"
+            reg_summary = {
+                'regulation_name': regulation_name,
+                'country': country,
+                'total_documents': regulation_result['total_documents'],
+                'relevant_documents': regulation_result['relevant_documents_found'],
+                'summary_statistics': regulation_result['summary_statistics'],
+                'processed_at': regulation_result['processed_at'],
+                'saved_at': datetime.now().isoformat()
+            }
+            
+            with open(reg_summary_file, 'w', encoding='utf-8') as f:
+                json.dump(reg_summary, f, indent=2, ensure_ascii=False)
+            
+            print(f"  💾 Saved regulation summary: {reg_summary_file.name}")
+            
+        except Exception as e:
+            print(f"  ⚠️  Error saving regulation summary: {e}")
+    
+    def _save_country_summary_immediate(self, country: str, country_results: List[Dict[str, Any]]):
+        """Save country summary immediately after processing all regulations in country"""
+        try:
+            # Create country folder in output directory
+            country_output_dir = self.output_dir / self.safe_folder_name(country)
+            country_output_dir.mkdir(exist_ok=True)
+            
+            # Calculate totals
+            total_relevant_docs = sum(r['relevant_documents_found'] for r in country_results)
+            total_docs_processed = sum(r['total_documents'] for r in country_results)
+            
+            # Save summary for country
+            country_summary = {
+                'country': country,
+                'total_regulations': len(country_results),
+                'total_documents_processed': total_docs_processed,
+                'total_relevant_documents': total_relevant_docs,
+                'success_rate': f"{(total_relevant_docs/total_docs_processed*100):.1f}%" if total_docs_processed > 0 else "0%",
+                'processed_at': datetime.now().isoformat(),
+                'saved_at': datetime.now().isoformat(),
+                'regulations': country_results
+            }
+            
+            summary_file = country_output_dir / f"{self.safe_folder_name(country)}_summary.json"
+            with open(summary_file, 'w', encoding='utf-8') as f:
+                json.dump(country_summary, f, indent=2, ensure_ascii=False)
+            
+        except Exception as e:
+            print(f"  ⚠️  Error saving country summary: {e}")
+    
+    def _create_regulation_summary(self, document_analyses: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Create summary statistics from document analyses"""
+        if not document_analyses:
+            return {}
+        
+        # Collect unique values across documents
+        countries = set(doc.get('country', 'Unknown') for doc in document_analyses)
+        authorities = set(doc.get('issuing_body', 'Unknown') for doc in document_analyses if doc.get('issuing_body') != 'Unknown')
+        tags = set(doc.get('tag', 'Unknown') for doc in document_analyses if doc.get('tag') != 'Unknown')
+        statuses = set(doc.get('regulation_status', 'Unknown') for doc in document_analyses if doc.get('regulation_status') != 'Unknown')
+        
+        # Calculate average confidence
+        confidences = [doc.get('confidence', 0) for doc in document_analyses]
+        avg_confidence = sum(confidences) / len(confidences) if confidences else 0
+        
+        # Count file types
+        file_types = {}
+        for doc in document_analyses:
+            file_type = doc.get('document_metadata', {}).get('file_type', 'unknown')
+            file_types[file_type] = file_types.get(file_type, 0) + 1
+        
+        return {
+            'document_count': len(document_analyses),
+            'average_confidence': round(avg_confidence, 2),
+            'countries': list(countries),
+            'issuing_authorities': list(authorities),
+            'regulation_tags': list(tags),
+            'regulation_statuses': list(statuses),
+            'file_type_breakdown': file_types,
+            'has_effective_dates': sum(1 for doc in document_analyses if doc.get('effective_date') and doc.get('effective_date') != 'Unknown'),
+            'has_penalties_info': sum(1 for doc in document_analyses if doc.get('penalties') and doc.get('penalties') != 'Unknown'),
+            'has_financial_integration': sum(1 for doc in document_analyses if doc.get('financial_integration') and doc.get('financial_integration') not in ['Unknown', 'No'])
+        }
     
     def save_country_results(self, country: str, country_results: List[Dict[str, Any]]):
         """Save results for a specific country"""
@@ -435,11 +534,17 @@ INSTRUCTIONS:
         country_output_dir = self.output_dir / self.safe_folder_name(country)
         country_output_dir.mkdir(exist_ok=True)
         
+        # Calculate totals
+        total_relevant_docs = sum(r['relevant_documents_found'] for r in country_results)
+        total_docs_processed = sum(r['total_documents'] for r in country_results)
+        
         # Save summary for country
         country_summary = {
             'country': country,
             'total_regulations': len(country_results),
-            'total_relevant_chunks': sum(r['relevant_chunks_found'] for r in country_results),
+            'total_documents_processed': total_docs_processed,
+            'total_relevant_documents': total_relevant_docs,
+            'success_rate': f"{(total_relevant_docs/total_docs_processed*100):.1f}%" if total_docs_processed > 0 else "0%",
             'processed_at': datetime.now().isoformat(),
             'regulations': country_results
         }
@@ -448,7 +553,7 @@ INSTRUCTIONS:
         with open(summary_file, 'w', encoding='utf-8') as f:
             json.dump(country_summary, f, indent=2, ensure_ascii=False)
         
-        # Save individual chunk files
+        # Save individual document analyses
         for regulation_result in country_results:
             regulation_name = regulation_result['regulation_name']
             safe_reg_name = self.safe_folder_name(regulation_name)
@@ -456,13 +561,28 @@ INSTRUCTIONS:
             reg_folder = country_output_dir / safe_reg_name
             reg_folder.mkdir(exist_ok=True)
             
-            # Save each relevant chunk as individual file
-            for i, analysis in enumerate(regulation_result['relevant_analyses']):
-                chunk_file = reg_folder / f"chunk_{i:03d}_{analysis['chunk_info']['source_file']}.json"
-                with open(chunk_file, 'w', encoding='utf-8') as f:
+            # Save regulation summary
+            reg_summary_file = reg_folder / "regulation_summary.json"
+            reg_summary = {
+                'regulation_name': regulation_name,
+                'country': country,
+                'total_documents': regulation_result['total_documents'],
+                'relevant_documents': regulation_result['relevant_documents_found'],
+                'summary_statistics': regulation_result['summary_statistics'],
+                'processed_at': regulation_result['processed_at']
+            }
+            with open(reg_summary_file, 'w', encoding='utf-8') as f:
+                json.dump(reg_summary, f, indent=2, ensure_ascii=False)
+            
+            # Save each document analysis as individual file
+            for i, analysis in enumerate(regulation_result['document_analyses']):
+                doc_filename = analysis.get('document_metadata', {}).get('filename', f'document_{i}')
+                safe_filename = self.safe_folder_name(doc_filename.replace('.', '_'))
+                doc_file = reg_folder / f"{safe_filename}_analysis.json"
+                with open(doc_file, 'w', encoding='utf-8') as f:
                     json.dump(analysis, f, indent=2, ensure_ascii=False)
         
-        print(f"💾 Saved results for {country}: {len(country_results)} regulations, {country_summary['total_relevant_chunks']} chunks")
+        print(f"💾 Saved results for {country}: {len(country_results)} regulations, {total_relevant_docs} relevant documents")
     
     def safe_folder_name(self, name: str) -> str:
         """Convert name to safe folder name"""
@@ -527,9 +647,10 @@ INSTRUCTIONS:
                     country_results.append(result)
                     all_results.append(result)
             
-            # Save country results
+            # Save country results immediately
             if country_results:
-                self.save_country_results(country, country_results)
+                self._save_country_summary_immediate(country, country_results)
+                print(f"  💾 Saved country summary for {country}")
             else:
                 print(f"  No relevant content found for {country}")
         
@@ -539,8 +660,11 @@ INSTRUCTIONS:
         print(f"\n🎉 Analysis completed!")
         print(f"📊 Total countries processed: {len(set(r['country'] for r in all_results))}")
         print(f"📋 Total regulations analyzed: {len(all_results)}")
-        total_chunks = sum(r['relevant_chunks_found'] for r in all_results)
-        print(f"📄 Total relevant chunks found: {total_chunks}")
+        total_docs = sum(r['total_documents'] for r in all_results)
+        total_relevant = sum(r['relevant_documents_found'] for r in all_results)
+        print(f"📄 Total documents processed: {total_docs}")
+        print(f"✅ Total relevant documents found: {total_relevant}")
+        print(f"📈 Overall success rate: {(total_relevant/total_docs*100):.1f}%" if total_docs > 0 else "0%")
         print(f"📁 Results saved to: {self.output_dir}")
     
     def generate_final_summary(self, all_results: List[Dict[str, Any]], 
@@ -559,9 +683,9 @@ INSTRUCTIONS:
             'summary_statistics': {
                 'total_countries': len(set(r['country'] for r in all_results)),
                 'total_regulations': len(all_results),
-                'total_documents': sum(r['total_documents'] for r in all_results),
-                'total_chunks_analyzed': sum(r['total_chunks_analyzed'] for r in all_results),
-                'total_relevant_chunks': sum(r['relevant_chunks_found'] for r in all_results)
+                'total_documents_processed': sum(r['total_documents'] for r in all_results),
+                'total_relevant_documents': sum(r['relevant_documents_found'] for r in all_results),
+                'overall_success_rate': f"{(sum(r['relevant_documents_found'] for r in all_results) / sum(r['total_documents'] for r in all_results) * 100):.1f}%" if sum(r['total_documents'] for r in all_results) > 0 else "0%"
             },
             'country_breakdown': {}
         }
@@ -573,19 +697,20 @@ INSTRUCTIONS:
                 final_summary['country_breakdown'][country] = {
                     'regulation_count': 0,
                     'document_count': 0,
-                    'relevant_chunk_count': 0,
+                    'relevant_document_count': 0,
                     'regulations': []
                 }
             
             country_data = final_summary['country_breakdown'][country]
             country_data['regulation_count'] += 1
             country_data['document_count'] += result['total_documents']
-            country_data['relevant_chunk_count'] += result['relevant_chunks_found']
+            country_data['relevant_document_count'] += result['relevant_documents_found']
             country_data['regulations'].append({
                 'regulation_name': result['regulation_name'],
                 'folder': result['regulation_folder'],
-                'documents': result['total_documents'],
-                'relevant_chunks': result['relevant_chunks_found']
+                'total_documents': result['total_documents'],
+                'relevant_documents': result['relevant_documents_found'],
+                'summary_stats': result['summary_statistics']
             })
         
         # Save final summary
@@ -603,7 +728,7 @@ def main():
     print(f"🎯 Analysis criteria: {RELEVANCE_CRITERIA}")
     print(f"🤖 Using model: {DEFAULT_MODEL}")
     print(f"📊 Confidence threshold: {DEFAULT_CONFIDENCE_THRESHOLD}")
-    print(f"📄 Chunk size: {DEFAULT_CHUNK_SIZE}")
+    print(f"📄 Max chars per document: {DEFAULT_MAX_CHARS_TEXT}")
     print("-" * 80)
     
     processor = RegulationProcessor(
@@ -611,7 +736,7 @@ def main():
         output_dir=DEFAULT_OUTPUT_DIR,
         api_key=DEFAULT_API_KEY,
         base_url=DEFAULT_BASE_URL,
-        chunk_size=DEFAULT_CHUNK_SIZE
+        max_chars=DEFAULT_MAX_CHARS_TEXT
     )
     
     processor.process_all_regulations(
