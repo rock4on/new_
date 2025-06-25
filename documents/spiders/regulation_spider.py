@@ -138,6 +138,26 @@ class RegulationSpider(scrapy.Spider):
         
         for i, url in enumerate(self.start_urls):
             self.logger.info(f"📨 Request {i+1}: {url}")
+            
+            # Check if start URL is a PDF
+            if self.pdf_pattern.search(url):
+                self.logger.info(f"📄 Start URL is a PDF, downloading directly: {url}")
+                self.pdfs_found += 1
+                
+                # Try to download PDF directly
+                if self.download_pdf_directly(url, url):
+                    self.logger.info(f"✅ Start URL PDF downloaded successfully")
+                else:
+                    self.logger.warning(f"⚠️  Start URL PDF download failed, trying FlareSolverr...")
+                    if self.download_pdf_with_flaresolverr(url, url):
+                        self.logger.info(f"✅ Start URL PDF downloaded via FlareSolverr")
+                    else:
+                        self.logger.error(f"❌ Start URL PDF download failed with both methods")
+                
+                # Don't make a Scrapy request for PDF URLs
+                continue
+            
+            # Regular HTML request
             yield scrapy.Request(
                 url=url,
                 callback=self.parse,
@@ -175,7 +195,8 @@ class RegulationSpider(scrapy.Spider):
         # Follow links if within depth limit
         depth_limit = getattr(self, 'custom_settings', {}).get('DEPTH_LIMIT', 3)
         if current_depth < depth_limit:
-            self.follow_links(response, current_depth)
+            self.logger.info(f"🔗 CALLING follow_links at depth {current_depth} (limit: {depth_limit})")
+            yield from self.follow_links(response, current_depth)
         else:
             self.logger.info(f"🛑 Max depth {depth_limit} reached")
     
@@ -391,7 +412,8 @@ class RegulationSpider(scrapy.Spider):
         self.logger.info(f"🔗 Processing {len(all_links)} links at depth {current_depth}")
         
         valid_links = []
-        filtered_out = {'no_href': 0, 'pdf': 0, 'external': 0, 'invalid': 0}
+        filtered_out = {'no_href': 0, 'pdf': 0, 'external': 0, 'invalid': 0, 'duplicate': 0}
+        debug_samples = {'external': [], 'invalid': []}
         
         for link in all_links:
             if not link:
@@ -409,6 +431,8 @@ class RegulationSpider(scrapy.Spider):
             # Check domain (be more permissive)
             if not self.is_allowed_url(url):
                 filtered_out['external'] += 1
+                if len(debug_samples['external']) < 3:
+                    debug_samples['external'].append(url)
                 continue
             
             # Basic URL validation
@@ -416,24 +440,51 @@ class RegulationSpider(scrapy.Spider):
                 parsed = urlparse(url)
                 if not parsed.scheme or not parsed.netloc:
                     filtered_out['invalid'] += 1
+                    if len(debug_samples['invalid']) < 3:
+                        debug_samples['invalid'].append(url)
                     continue
             except:
                 filtered_out['invalid'] += 1
+                if len(debug_samples['invalid']) < 3:
+                    debug_samples['invalid'].append(url)
+                continue
+            
+            # Skip duplicates in this batch
+            if url in valid_links:
+                filtered_out['duplicate'] += 1
                 continue
             
             valid_links.append(url)
         
         self.logger.info(f"📊 Link filtering results:")
-        self.logger.info(f"   Valid links: {len(valid_links)}")
-        self.logger.info(f"   Filtered out - No href: {filtered_out['no_href']}, PDFs: {filtered_out['pdf']}, External: {filtered_out['external']}, Invalid: {filtered_out['invalid']}")
+        self.logger.info(f"   ✅ Valid links: {len(valid_links)}")
+        self.logger.info(f"   ❌ Filtered out:")
+        self.logger.info(f"      No href: {filtered_out['no_href']}")
+        self.logger.info(f"      PDFs: {filtered_out['pdf']}")
+        self.logger.info(f"      External: {filtered_out['external']}")
+        self.logger.info(f"      Invalid: {filtered_out['invalid']}")
+        self.logger.info(f"      Duplicates: {filtered_out['duplicate']}")
+        
+        # Show samples of filtered URLs for debugging
+        if debug_samples['external']:
+            self.logger.info(f"   🌍 Sample external URLs: {debug_samples['external']}")
+        if debug_samples['invalid']:
+            self.logger.info(f"   ❌ Sample invalid URLs: {debug_samples['invalid']}")
+        
+        # Show first few valid links for debugging
+        if valid_links:
+            sample_links = valid_links[:3]
+            self.logger.info(f"   ✅ Sample valid links: {sample_links}")
         
         # Limit links per page for performance
         max_links = min(len(valid_links), 15)
+        requests_yielded = 0
         
         for i, url in enumerate(valid_links[:max_links]):
             self.links_followed += 1
+            requests_yielded += 1
             
-            self.logger.info(f"🔗 FOLLOWING LINK #{self.links_followed} (depth {current_depth + 1}): {url}")
+            self.logger.info(f"🔗 YIELDING LINK #{self.links_followed} (depth {current_depth + 1}): {url}")
             
             yield scrapy.Request(
                 url=url,
@@ -446,21 +497,35 @@ class RegulationSpider(scrapy.Spider):
                 dont_filter=False
             )
         
+        self.logger.info(f"📨 YIELDED {requests_yielded} REQUESTS from this page")
+        
         if len(valid_links) > max_links:
             self.logger.info(f"🔗 Limited to {max_links} links (had {len(valid_links)} valid links)")
     
     def is_allowed_url(self, url):
         """Check if URL is from allowed domain - more permissive"""
         try:
-            domain = urlparse(url).netloc.lower()
+            parsed = urlparse(url)
+            domain = parsed.netloc.lower()
+            
+            # Log domain check for debugging
+            self.logger.debug(f"🔍 Checking domain: {domain} against {self.allowed_domains}")
             
             # Check exact match
             if domain in self.allowed_domains:
+                self.logger.debug(f"✅ Exact match: {domain}")
                 return True
             
             # Check if any allowed domain is a subdomain or parent domain
             for allowed in self.allowed_domains:
-                if domain.endswith(f'.{allowed}') or allowed.endswith(f'.{domain}'):
+                # Check if domain is subdomain of allowed
+                if domain.endswith(f'.{allowed}'):
+                    self.logger.debug(f"✅ Subdomain match: {domain} is subdomain of {allowed}")
+                    return True
+                
+                # Check if allowed is subdomain of domain  
+                if allowed.endswith(f'.{domain}'):
+                    self.logger.debug(f"✅ Parent domain match: {allowed} is subdomain of {domain}")
                     return True
                     
                 # Remove www and check again
@@ -468,8 +533,15 @@ class RegulationSpider(scrapy.Spider):
                 clean_allowed = allowed.replace('www.', '')
                 
                 if clean_domain == clean_allowed:
+                    self.logger.debug(f"✅ Clean match: {clean_domain}")
+                    return True
+                
+                # Check partial matches (more permissive)
+                if clean_domain in clean_allowed or clean_allowed in clean_domain:
+                    self.logger.debug(f"✅ Partial match: {clean_domain} <-> {clean_allowed}")
                     return True
             
+            self.logger.debug(f"❌ No match for: {domain}")
             return False
             
         except Exception as e:
