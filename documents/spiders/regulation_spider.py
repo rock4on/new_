@@ -41,16 +41,9 @@ class RegulationSpider(scrapy.Spider):
         self.allowed_domains = self.setup_allowed_domains()
         self.logger.info(f"🌐 Allowed domains: {self.allowed_domains}")
         
-        # Create output folder using FILES_STORE if available
-        files_store = self.settings.get('FILES_STORE', 'regulation_downloads')
+        # Create output folder - settings not available in __init__, use default
         safe_name = self.make_safe_filename(self.regulation_name)
-        
-        if files_store != 'regulation_downloads':
-            # Pipeline is setting FILES_STORE, use it directly
-            self.output_folder = Path(files_store)
-        else:
-            # Default behavior
-            self.output_folder = Path(files_store) / safe_name
+        self.output_folder = Path("regulation_downloads") / safe_name
             
         self.output_folder.mkdir(parents=True, exist_ok=True)
         self.logger.info(f"📁 Output folder: {self.output_folder}")
@@ -130,6 +123,17 @@ class RegulationSpider(scrapy.Spider):
     
     def start_requests(self):
         """Generate initial requests with logging"""
+        # Now we can access settings, update output folder if needed
+        try:
+            files_store = self.crawler.settings.get('FILES_STORE')
+            if files_store and files_store != 'regulation_downloads':
+                self.output_folder = Path(files_store)
+                self.output_folder.mkdir(parents=True, exist_ok=True)
+                self.logger.info(f"📁 Updated output folder from settings: {self.output_folder}")
+        except:
+            # Keep default if settings not accessible
+            pass
+        
         self.logger.info(f"🎯 Starting {len(self.start_urls)} initial requests")
         
         for i, url in enumerate(self.start_urls):
@@ -169,10 +173,11 @@ class RegulationSpider(scrapy.Spider):
         self.extract_and_save_pdfs(response)
         
         # Follow links if within depth limit
-        if current_depth < self.settings.getint('DEPTH_LIMIT', 3):
+        depth_limit = getattr(self, 'custom_settings', {}).get('DEPTH_LIMIT', 3)
+        if current_depth < depth_limit:
             self.follow_links(response, current_depth)
         else:
-            self.logger.info(f"🛑 Max depth {self.settings.getint('DEPTH_LIMIT', 3)} reached")
+            self.logger.info(f"🛑 Max depth {depth_limit} reached")
     
     def save_page_content(self, response):
         """Save HTML and text content directly to files"""
@@ -297,8 +302,9 @@ class RegulationSpider(scrapy.Spider):
         try:
             self.logger.info(f"⬇️  Downloading PDF: {pdf_url}")
             
+            user_agent = getattr(self, 'custom_settings', {}).get('USER_AGENT', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
             headers = {
-                'User-Agent': self.settings.get('USER_AGENT'),
+                'User-Agent': user_agent,
                 'Referer': source_page,
                 'Accept': 'application/pdf,application/octet-stream,*/*'
             }
