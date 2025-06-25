@@ -16,8 +16,8 @@ class ExcelReader:
         self.excel_file = Path(excel_file_path)
         self.regulations = []
         
-    def read_excel(self, regulation_column='Regulation Name', sources_column='Sources'):
-        """Read Excel file and extract regulation data"""
+    def read_excel(self, regulation_column='Regulation Name', sources_column='Sources', country_column='Country'):
+        """Read Excel file and extract regulation data including country"""
         print(f"📊 Reading Excel file: {self.excel_file}")
         
         try:
@@ -44,12 +44,15 @@ class ExcelReader:
             # Find the correct column names (case-insensitive)
             reg_col = None
             sources_col = None
+            country_col = None
             
             for col in df.columns:
                 if regulation_column.lower() in col.lower():
                     reg_col = col
                 if sources_column.lower() in col.lower():
                     sources_col = col
+                if country_column.lower() in col.lower():
+                    country_col = col
             
             if not reg_col:
                 print(f"❌ Could not find regulation column. Available columns: {list(df.columns)}")
@@ -59,14 +62,21 @@ class ExcelReader:
                 print(f"❌ Could not find sources column. Available columns: {list(df.columns)}")
                 return []
             
+            if not country_col:
+                print(f"⚠️  Could not find country column. Available columns: {list(df.columns)}")
+                print(f"⚠️  Will use 'Unknown_Country' as default")
+            
             print(f"✅ Using regulation column: {reg_col}")
             print(f"✅ Using sources column: {sources_col}")
+            if country_col:
+                print(f"✅ Using country column: {country_col}")
             
             # Process each row
             regulations = []
             for index, row in df.iterrows():
                 regulation_name = str(row[reg_col]).strip() if pd.notna(row[reg_col]) else ""
                 sources_text = str(row[sources_col]).strip() if pd.notna(row[sources_col]) else ""
+                country = str(row[country_col]).strip() if country_col and pd.notna(row[country_col]) else "Unknown_Country"
                 
                 if regulation_name and sources_text and regulation_name != 'nan' and sources_text != 'nan':
                     urls = self.extract_urls_from_text(sources_text)
@@ -74,15 +84,16 @@ class ExcelReader:
                     if urls:
                         regulation = {
                             'name': regulation_name,
+                            'country': country,
                             'sources_text': sources_text,
                             'urls': urls,
                             'row_number': index + 1,
                             'url_count': len(urls)
                         }
                         regulations.append(regulation)
-                        print(f"✅ Regulation: {regulation_name} - Found {len(urls)} URLs")
+                        print(f"✅ {country}: {regulation_name} - Found {len(urls)} URLs")
                     else:
-                        print(f"⚠️  Regulation: {regulation_name} - No URLs found in sources text")
+                        print(f"⚠️  {country}: {regulation_name} - No URLs found in sources text")
             
             self.regulations = regulations
             print(f"📊 Successfully processed {len(regulations)} regulations with URLs")
@@ -180,7 +191,7 @@ class ExcelReader:
         
         print(f"\n📋 REGULATIONS:")
         for i, reg in enumerate(self.regulations, 1):
-            print(f"{i:2d}. {reg['name']} ({reg['url_count']} URLs)")
+            print(f"{i:2d}. [{reg['country']}] {reg['name']} ({reg['url_count']} URLs)")
             for url in reg['urls'][:3]:  # Show first 3 URLs
                 print(f"    - {url}")
             if reg['url_count'] > 3:
@@ -190,16 +201,17 @@ def main():
     import sys
     
     if len(sys.argv) < 2:
-        print("Usage: python excel_reader.py <excel_file> [regulation_column] [sources_column]")
-        print("Example: python excel_reader.py regulations.xlsx 'Regulation Name' 'Sources'")
+        print("Usage: python excel_reader.py <excel_file> [regulation_column] [sources_column] [country_column]")
+        print("Example: python excel_reader.py regulations.xlsx 'Regulation Name' 'Sources' 'Country'")
         sys.exit(1)
     
     excel_file = sys.argv[1]
     regulation_column = sys.argv[2] if len(sys.argv) > 2 else 'Regulation Name'
     sources_column = sys.argv[3] if len(sys.argv) > 3 else 'Sources'
+    country_column = sys.argv[4] if len(sys.argv) > 4 else 'Country'
     
     reader = ExcelReader(excel_file)
-    regulations = reader.read_excel(regulation_column, sources_column)
+    regulations = reader.read_excel(regulation_column, sources_column, country_column)
     
     if regulations:
         reader.print_summary()

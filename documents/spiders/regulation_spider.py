@@ -26,12 +26,13 @@ class RegulationSpider(scrapy.Spider):
         'LOG_LEVEL': 'INFO'
     }
     
-    def __init__(self, regulation_name=None, start_urls=None, *args, **kwargs):
+    def __init__(self, regulation_name=None, country=None, start_urls=None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         
-        # Set regulation name
+        # Set regulation name and country
         self.regulation_name = regulation_name or "unknown_regulation"
-        self.logger.info(f"🚀 Initializing spider for regulation: {self.regulation_name}")
+        self.country = country or "Unknown_Country"
+        self.logger.info(f"🚀 Initializing spider for regulation: [{self.country}] {self.regulation_name}")
         
         # Parse start URLs with extensive logging
         self.start_urls = self.parse_start_urls(start_urls)
@@ -223,6 +224,7 @@ class RegulationSpider(scrapy.Spider):
             metadata = {
                 'url': response.url,
                 'regulation': self.regulation_name,
+                'country': self.country,
                 'title': response.css('title::text').get() or '',
                 'status_code': response.status,
                 'depth': response.meta.get('depth', 0),
@@ -379,6 +381,7 @@ class RegulationSpider(scrapy.Spider):
                     'url': pdf_url,
                     'source_page': source_page,
                     'regulation': self.regulation_name,
+                    'country': self.country,
                     'filename': pdf_filename,
                     'file_size': file_size,
                     'content_type': content_type,
@@ -592,6 +595,7 @@ class RegulationSpider(scrapy.Spider):
                             'url': pdf_url,
                             'source_page': source_page,
                             'regulation': self.regulation_name,
+                            'country': self.country,
                             'filename': target_file.name,
                             'file_size': target_file.stat().st_size,
                             'downloaded_at': datetime.now().isoformat(),
@@ -629,6 +633,7 @@ class RegulationSpider(scrapy.Spider):
         
         summary = {
             'regulation_name': self.regulation_name,
+            'country': self.country,
             'spider_closed_at': datetime.now().isoformat(),
             'close_reason': reason,
             'crawl_stats': {
@@ -655,7 +660,7 @@ class RegulationSpider(scrapy.Spider):
             with open(summary_file, 'w', encoding='utf-8') as f:
                 json.dump(summary, f, indent=2, ensure_ascii=False)
             
-            self.logger.info(f"🎉 SPIDER COMPLETED FOR: {self.regulation_name}")
+            self.logger.info(f"🎉 SPIDER COMPLETED FOR: [{self.country}] {self.regulation_name}")
             self.logger.info(f"📊 FINAL STATS:")
             self.logger.info(f"   📄 Pages crawled: {self.pages_crawled}")
             self.logger.info(f"   📎 PDFs found: {self.pdfs_found}")

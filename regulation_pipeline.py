@@ -83,11 +83,11 @@ class RegulationPipeline:
         print("✅ All prerequisites met!")
         return True
     
-    def load_regulations(self, regulation_column='Regulation Name', sources_column='Sources'):
+    def load_regulations(self, regulation_column='Regulation Name', sources_column='Sources', country_column='Country'):
         """Load regulation data from Excel file"""
         print(f"\n📊 Loading regulations from Excel...")
         
-        self.regulations = self.excel_reader.read_excel(regulation_column, sources_column)
+        self.regulations = self.excel_reader.read_excel(regulation_column, sources_column, country_column)
         
         if not self.regulations:
             print("❌ No regulations found in Excel file")
@@ -104,23 +104,31 @@ class RegulationPipeline:
     def scrape_regulation(self, regulation):
         """Scrape content for a single regulation"""
         reg_name = regulation['name']
+        country = regulation['country']
         urls = regulation['urls']
         
-        print(f"\n🔄 Scraping regulation: {reg_name}")
+        print(f"\n🔄 Scraping regulation: [{country}] {reg_name}")
         print(f"🎯 URLs to scrape: {len(urls)}")
         
-        # Create regulation-specific output folder
-        safe_name = self.safe_folder_name(reg_name)
-        reg_output_dir = self.output_dir / safe_name
+        # Create country-based folder structure
+        safe_country = self.safe_folder_name(country)
+        safe_reg_name = self.safe_folder_name(reg_name)
+        
+        country_dir = self.output_dir / safe_country
+        country_dir.mkdir(exist_ok=True)
+        
+        reg_output_dir = country_dir / safe_reg_name
         reg_output_dir.mkdir(exist_ok=True)
         
         # Save regulation info
         reg_info = {
             'regulation_name': reg_name,
+            'country': country,
             'sources_text': regulation['sources_text'],
             'urls': urls,
             'scraping_started_at': datetime.now().isoformat(),
-            'output_folder': str(reg_output_dir)
+            'output_folder': str(reg_output_dir),
+            'country_folder': str(country_dir)
         }
         
         reg_info_file = reg_output_dir / "regulation_info.json"
@@ -138,6 +146,7 @@ class RegulationPipeline:
             cmd = [
                 'scrapy', 'crawl', 'regulation',
                 '-a', f'regulation_name={reg_name}',
+                '-a', f'country={country}',
                 '-a', f'start_urls={urls_str}',
                 '-s', f'FILES_STORE={reg_output_dir}',
                 '-s', 'LOG_LEVEL=INFO'
@@ -188,29 +197,35 @@ class RegulationPipeline:
             
             return {
                 'regulation_name': reg_name,
+                'country': country,
                 'status': status,
                 'scraping_duration': scraping_time,
                 'output_folder': str(reg_output_dir),
+                'country_folder': str(country_dir),
                 'scraped_content_count': scraped_files,
                 'error_message': error_message
             }
             
         except subprocess.TimeoutExpired:
-            print(f"⏰ Scraping timeout for {reg_name}")
+            print(f"⏰ Scraping timeout for [{country}] {reg_name}")
             return {
                 'regulation_name': reg_name,
+                'country': country,
                 'status': 'timeout',
                 'scraping_duration': time.time() - start_time,
                 'output_folder': str(reg_output_dir),
+                'country_folder': str(country_dir),
                 'error_message': 'Scraping timeout (30 minutes)'
             }
         except Exception as e:
-            print(f"❌ Error scraping {reg_name}: {e}")
+            print(f"❌ Error scraping [{country}] {reg_name}: {e}")
             return {
                 'regulation_name': reg_name,
+                'country': country,
                 'status': 'error',
                 'scraping_duration': time.time() - start_time,
                 'output_folder': str(reg_output_dir),
+                'country_folder': str(country_dir),
                 'error_message': str(e)
             }
     
@@ -237,7 +252,7 @@ class RegulationPipeline:
         safe_name = safe_name.strip('._')
         return safe_name[:100]  # Limit length
     
-    def run_pipeline(self, regulation_column='Regulation Name', sources_column='Sources'):
+    def run_pipeline(self, regulation_column='Regulation Name', sources_column='Sources', country_column='Country'):
         """Run the complete pipeline"""
         print(f"🚀 Starting Regulation Scraping Pipeline")
         print(f"⏰ Started at: {self.pipeline_start_time}")
@@ -249,7 +264,7 @@ class RegulationPipeline:
             return False
         
         # Step 2: Load regulations from Excel
-        if not self.load_regulations(regulation_column, sources_column):
+        if not self.load_regulations(regulation_column, sources_column, country_column):
             print("❌ Failed to load regulations. Exiting.")
             return False
         
@@ -330,27 +345,37 @@ class RegulationPipeline:
         print(f"📊 Full report: {report_file}")
         
         # List regulation folders
-        print(f"\n📁 REGULATION FOLDERS:")
+        print(f"\n📁 REGULATION FOLDERS BY COUNTRY:")
+        countries = {}
         for result in self.results:
-            status_icon = "✅" if result['status'] == 'completed' else "❌"
-            folder_name = Path(result['output_folder']).name
-            content_count = result.get('scraped_content_count', {})
-            if isinstance(content_count, dict):
-                file_count = content_count.get('total_files', 0)
-            else:
-                file_count = 0
-            print(f"{status_icon} {folder_name} ({file_count} files)")
+            country = result.get('country', 'Unknown')
+            if country not in countries:
+                countries[country] = []
+            countries[country].append(result)
+        
+        for country, regulations in countries.items():
+            print(f"\n🌍 {country}:")
+            for result in regulations:
+                status_icon = "✅" if result['status'] == 'completed' else "❌"
+                folder_name = Path(result['output_folder']).name
+                content_count = result.get('scraped_content_count', {})
+                if isinstance(content_count, dict):
+                    file_count = content_count.get('total_files', 0)
+                else:
+                    file_count = 0
+                print(f"  {status_icon} {folder_name} ({file_count} files)")
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python regulation_pipeline.py <excel_file> [regulation_column] [sources_column]")
-        print("Example: python regulation_pipeline.py regulations.xlsx 'Regulation Name' 'Sources'")
+        print("Usage: python regulation_pipeline.py <excel_file> [regulation_column] [sources_column] [country_column]")
+        print("Example: python regulation_pipeline.py regulations.xlsx 'Regulation Name' 'Sources' 'Country'")
         print("\nThe pipeline will:")
-        print("1. Read the Excel file and extract regulations with their source URLs")
-        print("2. For each regulation, create a dedicated folder")
+        print("1. Read the Excel file and extract regulations with their source URLs and countries")
+        print("2. For each regulation, create a country-based folder structure")
         print("3. Scrape content from source URLs using Scrapy (depth limit 2-3)")
         print("4. Use FlareSolverr fallback for 403 errors or Cloudflare protection")
-        print("5. Store HTML, PDF, and text content in regulation-specific folders")
+        print("5. Store HTML, PDF, and text content in country/regulation-specific folders")
+        print("\nFolder structure: regulation_scraping_results/Country/Regulation_Name/")
         print("\nPrerequisites:")
         print("- FlareSolverr running on localhost:8191")
         print("- Required packages: scrapy, pandas, requests, beautifulsoup4, html2text")
@@ -359,10 +384,11 @@ def main():
     excel_file = sys.argv[1]
     regulation_column = sys.argv[2] if len(sys.argv) > 2 else 'Regulation Name'
     sources_column = sys.argv[3] if len(sys.argv) > 3 else 'Sources'
+    country_column = sys.argv[4] if len(sys.argv) > 4 else 'Country'
     
     # Initialize and run pipeline
     pipeline = RegulationPipeline(excel_file)
-    success = pipeline.run_pipeline(regulation_column, sources_column)
+    success = pipeline.run_pipeline(regulation_column, sources_column, country_column)
     
     if success:
         print("\n🎉 Pipeline completed successfully!")
