@@ -62,7 +62,35 @@ class RegulationSpider(scrapy.Spider):
         super().__init__(*args, **kwargs)
         
         self.regulation_name = regulation_name or "unknown_regulation"
-        self.start_urls = start_urls or []
+        
+        # Handle start_urls parameter - it comes as a string from command line
+        if start_urls:
+            if isinstance(start_urls, str):
+                # Split comma-separated URLs and clean them
+                self.start_urls = [url.strip() for url in start_urls.split(',') if url.strip()]
+            else:
+                self.start_urls = start_urls
+        else:
+            self.start_urls = []
+        
+        # Validate URLs have proper scheme
+        validated_urls = []
+        for url in self.start_urls:
+            if not url.startswith(('http://', 'https://')):
+                if url.startswith('www.'):
+                    url = f'https://{url}'
+                elif '.' in url:  # Looks like a domain
+                    url = f'https://{url}'
+                else:
+                    self.logger.warning(f"Skipping invalid URL: {url}")
+                    continue
+            validated_urls.append(url)
+        
+        self.start_urls = validated_urls
+        
+        if not self.start_urls:
+            self.logger.error("No valid start URLs provided!")
+            return
         
         # Create regulation-specific folder
         self.regulation_folder = Path("regulation_downloads") / self.safe_folder_name(self.regulation_name)
@@ -109,8 +137,13 @@ class RegulationSpider(scrapy.Spider):
         
         print(f"🚀 RegulationSpider initialized for: {self.regulation_name}")
         print(f"📁 Output folder: {self.regulation_folder}")
-        print(f"🎯 Start URLs: {len(self.start_urls)}")
+        print(f"🎯 Start URLs ({len(self.start_urls)}): {self.start_urls}")
         print(f"🌐 Allowed domains: {self.allowed_domains}")
+        
+        # Log to Scrapy logger as well
+        self.logger.info(f"Spider initialized with {len(self.start_urls)} start URLs")
+        for i, url in enumerate(self.start_urls):
+            self.logger.info(f"Start URL {i+1}: {url}")
     
     def safe_folder_name(self, name):
         """Convert regulation name to safe folder name"""

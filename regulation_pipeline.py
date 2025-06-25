@@ -132,12 +132,15 @@ class RegulationPipeline:
         
         try:
             # Prepare Scrapy command
+            # Escape URLs properly for shell
+            urls_str = ",".join(urls)
+            
             cmd = [
                 'scrapy', 'crawl', 'regulation',
                 '-a', f'regulation_name={reg_name}',
-                '-a', f'start_urls={",".join(urls)}',
+                '-a', f'start_urls={urls_str}',
                 '-s', f'FILES_STORE={reg_output_dir}',
-                '-L', 'INFO'
+                '-s', 'LOG_LEVEL=INFO'
             ]
             
             print(f"🚀 Running: {' '.join(cmd)}")
