@@ -142,18 +142,14 @@ class RegulationSpider(scrapy.Spider):
             
             # Check if start URL is a PDF
             if self.pdf_pattern.search(url):
-                self.logger.info(f"📄 Start URL is a PDF, downloading directly: {url}")
+                self.logger.info(f"📄 Start URL is a PDF, downloading with FlareSolverr: {url}")
                 self.pdfs_found += 1
                 
-                # Try to download PDF directly
-                if self.download_pdf_directly(url, url):
-                    self.logger.info(f"✅ Start URL PDF downloaded successfully")
+                # Use FlareSolverr directly for PDF URLs
+                if self.download_pdf_with_flaresolverr(url, url):
+                    self.logger.info(f"✅ Start URL PDF downloaded via FlareSolverr")
                 else:
-                    self.logger.warning(f"⚠️  Start URL PDF download failed, trying FlareSolverr...")
-                    if self.download_pdf_with_flaresolverr(url, url):
-                        self.logger.info(f"✅ Start URL PDF downloaded via FlareSolverr")
-                    else:
-                        self.logger.error(f"❌ Start URL PDF download failed with both methods")
+                    self.logger.error(f"❌ Start URL PDF download failed with FlareSolverr")
                 
                 # Don't make a Scrapy request for PDF URLs
                 continue
@@ -288,15 +284,11 @@ class RegulationSpider(scrapy.Spider):
                 
                 self.logger.info(f"📄 FOUND PDF #{self.pdfs_found}: {pdf_url}")
                 
-                # Try to download PDF directly
-                if self.download_pdf_directly(pdf_url, response.url):
-                    self.logger.info(f"✅ PDF downloaded successfully")
+                # Use FlareSolverr directly for PDF URLs
+                if self.download_pdf_with_flaresolverr(pdf_url, response.url):
+                    self.logger.info(f"✅ PDF downloaded via FlareSolverr")
                 else:
-                    self.logger.warning(f"⚠️  PDF download failed, trying FlareSolverr...")
-                    if self.download_pdf_with_flaresolverr(pdf_url, response.url):
-                        self.logger.info(f"✅ PDF downloaded via FlareSolverr")
-                    else:
-                        self.logger.error(f"❌ PDF download failed with both methods")
+                    self.logger.error(f"❌ PDF download failed with FlareSolverr")
         
         # Check for PDFs in iframes, embeds, objects
         for selector_name, selector in [
@@ -316,14 +308,11 @@ class RegulationSpider(scrapy.Spider):
                     
                     self.logger.info(f"📄 FOUND PDF in {selector_name} #{self.pdfs_found}: {pdf_url}")
                     
-                    if self.download_pdf_directly(pdf_url, response.url):
-                        self.logger.info(f"✅ PDF downloaded successfully")
+                    # Use FlareSolverr directly for PDF URLs
+                    if self.download_pdf_with_flaresolverr(pdf_url, response.url):
+                        self.logger.info(f"✅ PDF downloaded via FlareSolverr")
                     else:
-                        self.logger.warning(f"⚠️  PDF download failed, trying FlareSolverr...")
-                        if self.download_pdf_with_flaresolverr(pdf_url, response.url):
-                            self.logger.info(f"✅ PDF downloaded via FlareSolverr")
-                        else:
-                            self.logger.error(f"❌ PDF download failed with both methods")
+                        self.logger.error(f"❌ PDF download failed with FlareSolverr")
         
         if pdf_count > 0:
             self.logger.info(f"📄 TOTAL PDFs found on this page: {pdf_count}")
