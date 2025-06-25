@@ -567,7 +567,7 @@ class RegulationSpider(scrapy.Spider):
             downloader = PDFDownloader()
             url_hash = hashlib.md5(pdf_url.encode()).hexdigest()[:8]
             safe_name = self.make_safe_filename(self.regulation_name)
-            filename = f"{safe_name}_pdf_flare_{self.pdfs_found:03d}_{url_hash}"
+            filename_base = f"{safe_name}_pdf_flare_{self.pdfs_found:03d}_{url_hash}"
             
             # Change to our output directory temporarily
             import os
@@ -575,12 +575,12 @@ class RegulationSpider(scrapy.Spider):
             os.chdir(self.output_folder.parent)
             
             try:
-                success = downloader.download_pdf(pdf_url, filename)
+                success = downloader.download_pdf(pdf_url, filename_base)
                 
                 if success:
-                    # Move the downloaded file to our output folder
-                    downloaded_file = Path("downloads") / f"{filename}.pdf"
-                    target_file = self.output_folder / f"{filename}.pdf"
+                    # Move the downloaded file to our output folder (PDFDownloader adds .pdf extension)
+                    downloaded_file = Path("downloads") / f"{filename_base}.pdf"
+                    target_file = self.output_folder / f"{filename_base}.pdf"
                     
                     if downloaded_file.exists():
                         downloaded_file.rename(target_file)
@@ -598,7 +598,7 @@ class RegulationSpider(scrapy.Spider):
                             'method': 'flaresolverr'
                         }
                         
-                        metadata_file = self.output_folder / f"{filename}_metadata.json"
+                        metadata_file = self.output_folder / f"{filename_base}_metadata.json"
                         with open(metadata_file, 'w', encoding='utf-8') as f:
                             json.dump(pdf_metadata, f, indent=2, ensure_ascii=False)
                         
