@@ -97,28 +97,13 @@ class DocSpider(scrapy.Spider):
         payload = {
             "cmd": "request.get",
             "url": url,
-            "maxTimeout": 90000,  # 90 seconds timeout
-            "headers": {
-                "User-Agent": self.current_ua,
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9,tl;q=0.8,fil;q=0.7",
-                "Accept-Encoding": "gzip, deflate, br",
-                "Cache-Control": "no-cache",
-                "Pragma": "no-cache",
-                "Connection": "keep-alive",
-                "Upgrade-Insecure-Requests": "1",
-                "Sec-Fetch-Dest": "document",
-                "Sec-Fetch-Mode": "navigate",
-                "Sec-Fetch-Site": "cross-site",
-                "Sec-Fetch-User": "?1",
-                "Referer": "https://www.google.com.ph/"
-            },
+            "maxTimeout": 300000,  # 5 minutes timeout for FlareSolverr v2
             "session": f"sec_gov_ph_session_{random.randint(1000, 9999)}",
             "returnOnlyCookies": False
         }
         
         try:
-            response = requests.post(self.flaresolverr_url, json=payload, timeout=100)
+            response = requests.post(self.flaresolverr_url, json=payload, timeout=310)
             response.raise_for_status()
             result = response.json()
             
@@ -368,25 +353,12 @@ class DocSpider(scrapy.Spider):
             payload = {
                 "cmd": "request.get",
                 "url": pdf_url,
-                "maxTimeout": 120000,  # 2 minutes for PDF download
-                "headers": {
-                    "User-Agent": random.choice(self.user_agents),
-                    "Accept": "application/pdf,application/octet-stream,*/*;q=0.9",
-                    "Accept-Language": "en-US,en;q=0.9,tl;q=0.8",
-                    "Accept-Encoding": "gzip, deflate, br",
-                    "Referer": metadata.get("src_page", "https://www.sec.gov.ph/"),
-                    "Connection": "keep-alive",
-                    "Upgrade-Insecure-Requests": "1",
-                    "Sec-Fetch-Dest": "document",
-                    "Sec-Fetch-Mode": "navigate",
-                    "Sec-Fetch-Site": "same-origin",
-                    "Cache-Control": "max-age=0"
-                },
+                "maxTimeout": 300000,  # 5 minutes for PDF download
                 "session": f"pdf_session_{random.randint(1000, 9999)}",
                 "returnOnlyCookies": False
             }
             
-            response = requests.post(self.flaresolverr_url, json=payload, timeout=130)
+            response = requests.post(self.flaresolverr_url, json=payload, timeout=310)
             response.raise_for_status()
             result = response.json()
             
@@ -820,18 +792,12 @@ class DocSpider(scrapy.Spider):
             payload = {
                 "cmd": "request.get",
                 "url": pdf_url,
-                "maxTimeout": 180000,  # 3 minutes for JS execution
-                "headers": {
-                    "User-Agent": random.choice(self.user_agents),
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    "Accept-Language": "en-US,en;q=0.9",
-                    "Referer": metadata.get("src_page", "https://www.sec.gov.ph/"),
-                },
+                "maxTimeout": 300000,  # 5 minutes for JS execution
                 "session": f"pdf_js_session_{random.randint(1000, 9999)}",
                 "returnOnlyCookies": False
             }
             
-            response = requests.post(self.flaresolverr_url, json=payload, timeout=200)
+            response = requests.post(self.flaresolverr_url, json=payload, timeout=310)
             response.raise_for_status()
             result = response.json()
             

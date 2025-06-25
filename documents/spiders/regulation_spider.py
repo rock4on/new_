@@ -1,13 +1,15 @@
-import re, scrapy
-from urllib.parse import urlparse, urljoin
-from documents.items import DocItem
+import re
+import scrapy
+import sys
 import json
 import requests
 import time
 import random
+import hashlib
+from urllib.parse import urlparse, urljoin
 from datetime import datetime
 from pathlib import Path
-import hashlib
+from documents.items import DocItem
 
 PDF_RE = re.compile(r"\.pdf$", re.I)
 
@@ -87,9 +89,9 @@ class RegulationSpider(scrapy.Spider):
         ]
         
         # HTML and PDF downloaders
-        from pathlib import Path
-        import sys
-        sys.path.append(str(Path(__file__).parent.parent.parent))
+        current_file_path = Path(__file__)
+        project_root = current_file_path.parent.parent.parent
+        sys.path.insert(0, str(project_root))
         
         try:
             from html_downloader import HTMLDownloader
