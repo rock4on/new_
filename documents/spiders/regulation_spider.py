@@ -6,7 +6,7 @@ import requests
 from pathlib import Path
 from datetime import datetime
 from urllib.parse import urlparse, urljoin
-from documents.items import DocItem
+# from documents.items import DocItem  # Not needed for direct downloads
 
 class RegulationSpider(scrapy.Spider):
     name = "regulation"
@@ -266,8 +266,11 @@ class RegulationSpider(scrapy.Spider):
                 if self.download_pdf_directly(pdf_url, response.url):
                     self.logger.info(f"✅ PDF downloaded successfully")
                 else:
-                    self.logger.warning(f"⚠️  PDF download failed, will try FlareSolverr")
-                    # TODO: Add FlareSolverr fallback here
+                    self.logger.warning(f"⚠️  PDF download failed, trying FlareSolverr...")
+                    if self.download_pdf_with_flaresolverr(pdf_url, response.url):
+                        self.logger.info(f"✅ PDF downloaded via FlareSolverr")
+                    else:
+                        self.logger.error(f"❌ PDF download failed with both methods")
         
         # Check for PDFs in iframes, embeds, objects
         for selector_name, selector in [
@@ -290,7 +293,11 @@ class RegulationSpider(scrapy.Spider):
                     if self.download_pdf_directly(pdf_url, response.url):
                         self.logger.info(f"✅ PDF downloaded successfully")
                     else:
-                        self.logger.warning(f"⚠️  PDF download failed")
+                        self.logger.warning(f"⚠️  PDF download failed, trying FlareSolverr...")
+                        if self.download_pdf_with_flaresolverr(pdf_url, response.url):
+                            self.logger.info(f"✅ PDF downloaded via FlareSolverr")
+                        else:
+                            self.logger.error(f"❌ PDF download failed with both methods")
         
         if pdf_count > 0:
             self.logger.info(f"📄 TOTAL PDFs found on this page: {pdf_count}")
@@ -312,18 +319,38 @@ class RegulationSpider(scrapy.Spider):
             response = requests.get(pdf_url, headers=headers, timeout=30, stream=True)
             
             if response.status_code == 200:
+                # Check if content is actually a PDF
+                content_type = response.headers.get('content-type', '').lower()
+                
+                # Read first chunk to check PDF signature
+                first_chunk = next(response.iter_content(chunk_size=1024), b'')
+                if not first_chunk.startswith(b'%PDF'):
+                    self.logger.warning(f"⚠️  URL doesn't return PDF content: {pdf_url}")
+                    self.logger.warning(f"   Content-Type: {content_type}")
+                    self.logger.warning(f"   First bytes: {first_chunk[:50]}")
+                    return False
+                
                 # Generate filename
                 url_hash = hashlib.md5(pdf_url.encode()).hexdigest()[:8]
-                pdf_filename = f"{self.regulation_name}_pdf_{self.pdfs_found:03d}_{url_hash}.pdf"
+                safe_name = self.make_safe_filename(self.regulation_name)
+                pdf_filename = f"{safe_name}_pdf_{self.pdfs_found:03d}_{url_hash}.pdf"
                 pdf_path = self.output_folder / pdf_filename
                 
                 # Save PDF
                 with open(pdf_path, 'wb') as f:
+                    f.write(first_chunk)  # Write the first chunk we already read
                     for chunk in response.iter_content(chunk_size=8192):
                         if chunk:
                             f.write(chunk)
                 
                 file_size = pdf_path.stat().st_size
+                
+                # Validate PDF file size
+                if file_size < 1000:  # Less than 1KB is probably not a real PDF
+                    self.logger.warning(f"⚠️  PDF file too small ({file_size} bytes), might be error page")
+                    pdf_path.unlink()  # Delete the file
+                    return False
+                
                 self.logger.info(f"💾 SAVED PDF: {pdf_filename} ({file_size} bytes)")
                 
                 # Save PDF metadata
@@ -333,6 +360,7 @@ class RegulationSpider(scrapy.Spider):
                     'regulation': self.regulation_name,
                     'filename': pdf_filename,
                     'file_size': file_size,
+                    'content_type': content_type,
                     'downloaded_at': datetime.now().isoformat(),
                     'method': 'direct_download'
                 }
@@ -342,10 +370,17 @@ class RegulationSpider(scrapy.Spider):
                     json.dump(pdf_metadata, f, indent=2, ensure_ascii=False)
                 
                 return True
+            elif response.status_code == 403:
+                self.logger.warning(f"🚫 403 Forbidden for PDF: {pdf_url}")
+                # Could add FlareSolverr fallback here
+                return False
             else:
                 self.logger.warning(f"❌ PDF download failed: HTTP {response.status_code}")
                 return False
                 
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"❌ Network error downloading PDF: {e}")
+            return False
         except Exception as e:
             self.logger.error(f"❌ PDF download error: {e}")
             return False
@@ -451,11 +486,66 @@ class RegulationSpider(scrapy.Spider):
             if failure.value.response.status == 403:
                 self.logger.info(f"🔄 Could try FlareSolverr fallback for: {failure.request.url}")
     
+    def download_pdf_with_flaresolverr(self, pdf_url, source_page):
+        """Download PDF using FlareSolverr"""
+        try:
+            import sys
+            sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+            from pdf_downloader import PDFDownloader
+            
+            downloader = PDFDownloader()
+            url_hash = hashlib.md5(pdf_url.encode()).hexdigest()[:8]
+            safe_name = self.make_safe_filename(self.regulation_name)
+            filename = f"{safe_name}_pdf_flare_{self.pdfs_found:03d}_{url_hash}"
+            
+            # Change to our output directory temporarily
+            import os
+            original_cwd = os.getcwd()
+            os.chdir(self.output_folder.parent)
+            
+            try:
+                success = downloader.download_pdf(pdf_url, filename)
+                
+                if success:
+                    # Move the downloaded file to our output folder
+                    downloaded_file = Path("downloads") / f"{filename}.pdf"
+                    target_file = self.output_folder / f"{filename}.pdf"
+                    
+                    if downloaded_file.exists():
+                        downloaded_file.rename(target_file)
+                        self.logger.info(f"💾 SAVED PDF via FlareSolverr: {target_file.name}")
+                        
+                        # Create metadata
+                        pdf_metadata = {
+                            'url': pdf_url,
+                            'source_page': source_page,
+                            'regulation': self.regulation_name,
+                            'filename': target_file.name,
+                            'file_size': target_file.stat().st_size,
+                            'downloaded_at': datetime.now().isoformat(),
+                            'method': 'flaresolverr'
+                        }
+                        
+                        metadata_file = self.output_folder / f"{filename}_metadata.json"
+                        with open(metadata_file, 'w', encoding='utf-8') as f:
+                            json.dump(pdf_metadata, f, indent=2, ensure_ascii=False)
+                        
+                        return True
+                    
+                return False
+                
+            finally:
+                os.chdir(original_cwd)
+                
+        except Exception as e:
+            self.logger.error(f"❌ FlareSolverr PDF download error: {e}")
+            return False
+    
     def handle_403_error(self, response):
         """Handle 403 errors"""
         self.logger.warning(f"🚫 403 error for: {response.url}")
-        # TODO: Add FlareSolverr fallback implementation
-        self.logger.info("🔄 FlareSolverr fallback not implemented yet")
+        # FlareSolverr fallback is now implemented above
+        self.logger.info("🔄 FlareSolverr fallback implemented for PDFs")
     
     def closed(self, reason):
         """Called when spider closes - save comprehensive summary"""
