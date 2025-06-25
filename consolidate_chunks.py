@@ -152,7 +152,7 @@ INSTRUCTIONS:
 
 
 def find_all_chunks(input_dir: str) -> Dict[str, List[str]]:
-    """Find all chunk files organized by country"""
+    """Find all chunk files organized by country from regulation_analysis_results structure"""
     input_path = Path(input_dir)
     
     if not input_path.exists():
@@ -169,15 +169,20 @@ def find_all_chunks(input_dir: str) -> Dict[str, List[str]]:
         country = country_dir.name
         chunk_files = []
         
-        # Find all JSON files in country directory and subdirectories
-        for json_file in country_dir.rglob("*.json"):
-            # Skip summary files, only process individual analysis files
-            if "summary" not in json_file.name.lower():
-                chunk_files.append(str(json_file))
+        # Look for regulation folders within each country directory
+        for regulation_folder in country_dir.iterdir():
+            if not regulation_folder.is_dir():
+                continue
+                
+            # Find all JSON files in regulation folders, excluding summary files
+            for json_file in regulation_folder.glob("*.json"):
+                # Skip summary files, only process individual analysis files
+                if "summary" not in json_file.name.lower():
+                    chunk_files.append(str(json_file))
         
         if chunk_files:
             country_chunks[country] = chunk_files
-            print(f"Found {len(chunk_files)} chunks for {country}")
+            print(f"Found {len(chunk_files)} analysis chunks for {country}")
     
     return country_chunks
 
