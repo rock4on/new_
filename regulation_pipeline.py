@@ -59,7 +59,7 @@ class RegulationPipeline:
             return False
         
         # Check required Python packages
-        required_packages = ['scrapy', 'pandas', 'requests', 'beautifulsoup4', 'html2text']
+        required_packages = ['scrapy', 'pandas', 'requests', 'bs4', 'html2text']
         missing_packages = []
         
         for package in required_packages:
@@ -302,8 +302,8 @@ class RegulationPipeline:
             
             # Small delay between regulations
             if i < len(self.regulations):
-                print("⏸️  Waiting 30 seconds before next regulation...")
-                time.sleep(30)
+                print("⏸️  Waiting 3 seconds before next regulation...")
+                time.sleep(3)
         
         # Step 4: Generate final report
         self.generate_final_report()

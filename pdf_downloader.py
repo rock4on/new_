@@ -34,11 +34,13 @@ class PDFDownloader:
         # Add random delay
         time.sleep(random.uniform(2, 4))
         
+        session_id = f"pdf_session_{random.randint(1000, 9999)}"
+        
         payload = {
             "cmd": "request.get",
             "url": url,
             "maxTimeout": 300000,  # 5 minutes timeout
-            "session": f"pdf_session_{random.randint(1000, 9999)}",
+            "session": session_id,
             "returnOnlyCookies": False
         }
         
@@ -46,6 +48,12 @@ class PDFDownloader:
             response = requests.post(self.flaresolverr_url, json=payload, timeout=310)
             response.raise_for_status()
             result = response.json()
+            
+            # Always clean up the session
+            try:
+                self.destroy_session(session_id)
+            except Exception as cleanup_error:
+                print(f"⚠️  Warning: Failed to cleanup session {session_id}: {cleanup_error}")
             
             if result.get("status") == "ok":
                 return result.get("solution", {})
@@ -55,7 +63,28 @@ class PDFDownloader:
                 
         except Exception as e:
             print(f"❌ FlareSolverr request failed: {e}")
+            # Try to cleanup session even on error
+            try:
+                self.destroy_session(session_id)
+            except:
+                pass
             return None
+    
+    def destroy_session(self, session_id):
+        """Destroy FlareSolverr session to free resources"""
+        destroy_payload = {
+            "cmd": "sessions.destroy",
+            "session": session_id
+        }
+        
+        try:
+            response = requests.post(self.flaresolverr_url, json=destroy_payload, timeout=30)
+            if response.status_code == 200:
+                print(f"🧹 Cleaned up FlareSolverr session: {session_id}")
+            else:
+                print(f"⚠️  Session cleanup warning for {session_id}: HTTP {response.status_code}")
+        except Exception as e:
+            print(f"⚠️  Session cleanup error for {session_id}: {e}")
     
     def extract_pdf_from_html(self, html_content, original_url):
         """Extract actual PDF URL from HTML viewer"""
