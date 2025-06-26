@@ -64,20 +64,27 @@ class FileMetadataProcessor:
         except Exception as e:
             print(f"Warning: Could not save processed folders file: {e}")
     
-    def is_folder_processed(self, folder_path: Path) -> bool:
-        """Check if a folder has already been processed"""
-        folder_key = str(folder_path.relative_to(self.input_dir))
-        folder_info = self.processed_folders.get(folder_key, {})
-        
-        if not folder_info:
-            return False
-        
-        # Check if folder modification time has changed
+    def is_folder_processed(self, country: str, regulation_folder: Path) -> bool:
+        """Check if a folder has already been processed by looking at output directory"""
         try:
-            current_mtime = folder_path.stat().st_mtime
-            stored_mtime = folder_info.get('mtime', 0)
-            return current_mtime == stored_mtime
-        except Exception:
+            # Create expected output path structure
+            safe_country = self.safe_folder_name(country)
+            safe_regulation = self.safe_folder_name(regulation_folder.name)
+            
+            country_output_dir = self.output_dir / safe_country
+            regulation_output_dir = country_output_dir / safe_regulation
+            
+            # Check if the regulation folder exists in output and has files
+            if regulation_output_dir.exists():
+                # Check if it has the expected output files
+                regulation_summary_file = regulation_output_dir / "regulation_summary.json"
+                if regulation_summary_file.exists():
+                    print(f"  ⏭️  Output already exists for: {regulation_folder.name}")
+                    return True
+            
+            return False
+        except Exception as e:
+            print(f"Warning: Could not check if folder is processed: {e}")
             return False
     
     def mark_folder_processed(self, folder_path: Path, result: Dict[str, Any]):
@@ -216,6 +223,20 @@ class FileMetadataProcessor:
         
         return result
 
+    def extract_metadata_for_file(self, extracted_text: str, document_url: str, country: str, esg_keywords: list, last_scraped: str) -> Dict[str, Any]:
+        """Extract metadata for a single file - separate function for parallel processing"""
+        try:
+            return extract_metadata(
+                text=extracted_text,
+                url=document_url,
+                country=country,
+                esg_keywords=esg_keywords,
+                last_scraped=last_scraped
+            )
+        except Exception as e:
+            print(f"  Error extracting metadata: {e}")
+            return {"metadata_error": str(e)}
+
     def process_file(self, file_path: Path, country: str = "Unknown", 
                     regulation_name: Optional[str] = None, 
                     use_llm: bool = True, document_url: str = "pdf") -> Dict[str, Any]:
@@ -267,22 +288,12 @@ class FileMetadataProcessor:
             "metadata": None
         }
         
-        # Extract metadata using LLM if requested and relevant
-        if use_llm and esg_relevant:
-            print(f"  ESG relevant (score: {match_score}) - extracting metadata...")
-            try:
-                record["metadata"] = extract_metadata(
-                    text=extracted_text,
-                    url=document_url,  # Use URL from spider_summary.json or fallback to "pdf"
-                    country=country,
-                    esg_keywords=ESG_KEYWORDS,
-                    last_scraped=datetime.now().strftime("%Y-%m-%d")
-                )
-            except Exception as e:
-                print(f"  Error extracting metadata: {e}")
-                record["metadata_error"] = str(e)
-        else:
+        # Mark if metadata extraction will be needed (but don't do it here for parallel processing)
+        record["needs_metadata"] = use_llm and esg_relevant
+        if not record["needs_metadata"]:
             print(f"  Not ESG relevant (score: {match_score}) - skipping metadata extraction")
+        else:
+            print(f"  ESG relevant (score: {match_score}) - will extract metadata in parallel")
         
         return record
     
@@ -354,8 +365,9 @@ class FileMetadataProcessor:
         
         print(f"  Processing {total_files} files with {max_workers} workers...")
         
+        # Step 1: Process files (text extraction, ESG scoring) in parallel
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submit all tasks
+            # Submit all file processing tasks
             future_to_params = {
                 executor.submit(self.process_file_with_cache, *params): params 
                 for params in files_with_params
@@ -373,8 +385,6 @@ class FileMetadataProcessor:
                         results.append(result)
                         if result.get('esg_relevant', False):
                             print(f"    ✅ ESG RELEVANT: {file_path.name} (score: {result.get('esg_match_score', 0)})")
-                            if result.get('metadata'):
-                                print(f"        Metadata extracted successfully")
                         else:
                             print(f"    ❌ NOT ESG RELEVANT: {file_path.name} (score: {result.get('esg_match_score', 0)})")
                 except Exception as e:
@@ -384,6 +394,52 @@ class FileMetadataProcessor:
                 if completed % 5 == 0 or completed == total_files:
                     print(f"    Progress: {completed}/{total_files} files processed")
         
+        # Step 2: Extract metadata for ESG-relevant files in parallel
+        metadata_tasks = []
+        for result in results:
+            if result.get('needs_metadata', False):
+                metadata_tasks.append(result)
+        
+        if metadata_tasks:
+            print(f"  Extracting metadata for {len(metadata_tasks)} ESG-relevant files...")
+            
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # Submit metadata extraction tasks
+                future_to_result = {}
+                for result in metadata_tasks:
+                    future = executor.submit(
+                        self.extract_metadata_for_file,
+                        result['extracted_text'],
+                        result['source_url'],
+                        files_with_params[0][1],  # country from first file params
+                        ESG_KEYWORDS,
+                        datetime.now().strftime("%Y-%m-%d")
+                    )
+                    future_to_result[future] = result
+                
+                # Collect metadata results
+                metadata_completed = 0
+                for future in as_completed(future_to_result):
+                    result = future_to_result[future]
+                    try:
+                        metadata = future.result()
+                        if "metadata_error" in metadata:
+                            result["metadata_error"] = metadata["metadata_error"]
+                        else:
+                            result["metadata"] = metadata
+                        print(f"    📊 Metadata extracted for: {result['file_name']}")
+                    except Exception as e:
+                        result["metadata_error"] = str(e)
+                        print(f"    💥 Metadata extraction failed for: {result['file_name']}")
+                    
+                    metadata_completed += 1
+                    if metadata_completed % 3 == 0 or metadata_completed == len(metadata_tasks):
+                        print(f"    Metadata progress: {metadata_completed}/{len(metadata_tasks)} completed")
+        
+        # Clean up temporary fields
+        for result in results:
+            result.pop('needs_metadata', None)
+        
         return results
 
     def process_regulation_folder(self, country: str, regulation_folder: Path, country_folder: Path, use_llm: bool = True) -> Dict[str, Any]:
@@ -391,9 +447,8 @@ class FileMetadataProcessor:
         
         print(f"\n🔄 Processing: [{country}] {regulation_folder.name}")
         
-        # Check if already processed
-        if self.is_folder_processed(regulation_folder):
-            print(f"  ⏭️  Skipping already processed folder: {regulation_folder.name}")
+        # Check if already processed by looking at output directory
+        if self.is_folder_processed(country, regulation_folder):
             return None
         
         # Load regulation info and spider summary
@@ -512,9 +567,8 @@ class FileMetadataProcessor:
             
             # Process each regulation in this country
             for regulation_folder in regulation_folders:
-                if self.is_folder_processed(regulation_folder):
+                if self.is_folder_processed(country, regulation_folder):
                     skipped_folders += 1
-                    print(f"  ⏭️  Skipping already processed: {regulation_folder.name}")
                     continue
                     
                 result = self.process_regulation_folder(country, regulation_folder, country_folder, use_llm)
