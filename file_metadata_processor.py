@@ -223,11 +223,83 @@ class FileMetadataProcessor:
         
         return result
 
+    def chunk_text_intelligently(self, text: str, max_chunk_size: int = 4000, overlap: int = 200) -> List[str]:
+        """Chunk text intelligently for LLM processing, preserving context"""
+        if len(text) <= max_chunk_size:
+            return [text]
+        
+        chunks = []
+        sentences = text.split('. ')
+        current_chunk = ""
+        
+        for sentence in sentences:
+            # If adding this sentence would exceed limit, save current chunk
+            if len(current_chunk + sentence) > max_chunk_size and current_chunk:
+                chunks.append(current_chunk.strip())
+                # Start new chunk with overlap from end of previous chunk
+                overlap_text = current_chunk[-overlap:] if len(current_chunk) > overlap else current_chunk
+                current_chunk = overlap_text + sentence + ". "
+            else:
+                current_chunk += sentence + ". "
+        
+        # Add the last chunk
+        if current_chunk.strip():
+            chunks.append(current_chunk.strip())
+        
+        return chunks
+
+    def extract_best_chunk_for_metadata(self, text: str, esg_keywords: list, max_chunk_size: int = 4000) -> str:
+        """Extract the most relevant chunk of text for metadata extraction"""
+        # If text is short enough, return as-is
+        if len(text) <= max_chunk_size:
+            return text
+        
+        # Split into chunks
+        chunks = self.chunk_text_intelligently(text, max_chunk_size)
+        
+        if not chunks:
+            return text[:max_chunk_size]
+        
+        # Score each chunk based on ESG keyword density
+        best_chunk = chunks[0]
+        best_score = 0
+        
+        for chunk in chunks:
+            # Calculate ESG relevance score for this chunk
+            chunk_lower = chunk.lower()
+            score = 0
+            
+            # Count keyword matches (weighted by importance)
+            for keyword in esg_keywords:
+                if isinstance(keyword, str):
+                    keyword_lower = keyword.lower()
+                    score += chunk_lower.count(keyword_lower) * 2
+                    # Bonus for keywords in titles/headers (assuming they're capitalized)
+                    score += chunk.count(keyword) * 1
+            
+            # Bonus for longer chunks (more context)
+            score += len(chunk) / 1000
+            
+            if score > best_score:
+                best_score = score
+                best_chunk = chunk
+        
+        # If no chunk scored well, return the first chunk (likely contains header/intro)
+        return best_chunk
+
     def extract_metadata_for_file(self, extracted_text: str, document_url: str, country: str, esg_keywords: list, last_scraped: str) -> Dict[str, Any]:
-        """Extract metadata for a single file - separate function for parallel processing"""
+        """Extract metadata for a single file using chunked text for speed"""
         try:
+            # Use the most relevant chunk instead of full text
+            chunk_for_metadata = self.extract_best_chunk_for_metadata(extracted_text, esg_keywords)
+            
+            # Add context about chunking to help LLM understand
+            if len(extracted_text) > len(chunk_for_metadata):
+                chunk_info = f"\n\n[NOTE: This is the most relevant section from a {len(extracted_text):,} character document. Full document length: {len(extracted_text.split())} words]"
+                chunk_for_metadata = chunk_for_metadata + chunk_info
+            
             return extract_metadata(
-                text=extracted_text,
+                text=chunk_for_metadata,
                 url=document_url,
                 country=country,
                 esg_keywords=esg_keywords,
@@ -384,7 +456,8 @@ class FileMetadataProcessor:
                     if result:
                         results.append(result)
                         if result.get('esg_relevant', False):
-                            print(f"    ✅ ESG RELEVANT: {file_path.name} (score: {result.get('esg_match_score', 0)})")
+                            text_len = len(result.get('extracted_text', ''))
+                            print(f"    ✅ ESG RELEVANT: {file_path.name} (score: {result.get('esg_match_score', 0)}, {text_len:,} chars)")
                         else:
                             print(f"    ❌ NOT ESG RELEVANT: {file_path.name} (score: {result.get('esg_match_score', 0)})")
                 except Exception as e:
@@ -427,7 +500,13 @@ class FileMetadataProcessor:
                             result["metadata_error"] = metadata["metadata_error"]
                         else:
                             result["metadata"] = metadata
-                        print(f"    📊 Metadata extracted for: {result['file_name']}")
+                        
+                        # Show chunk info if text was chunked
+                        original_len = len(result.get('extracted_text', ''))
+                        if original_len > 4000:
+                            print(f"    📊 Metadata extracted for: {result['file_name']} (chunked from {original_len:,} chars)")
+                        else:
+                            print(f"    📊 Metadata extracted for: {result['file_name']}")
                     except Exception as e:
                         result["metadata_error"] = str(e)
                         print(f"    💥 Metadata extraction failed for: {result['file_name']}")
