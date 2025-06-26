@@ -389,12 +389,15 @@ class FileMetadataProcessor:
                 analyzed_documents.append({
                     'file_name': doc_analysis.get('file_name'),
                     'file_type': doc_analysis.get('file_type'),
+                    'file_size': doc_analysis.get('file_size'),
+                    'extracted_text': doc_analysis.get('extracted_text'),
+                    'text_length': doc_analysis.get('text_length'),
+                    'word_count': doc_analysis.get('word_count'),
                     'esg_relevant': doc_analysis.get('esg_relevant', False),
                     'esg_match_score': doc_analysis.get('esg_match_score', 0),
-                    'source_url': doc_analysis.get('source_url'),  # Use source_url from document record
-                    'regulation_folder': regulation_result.get('regulation_folder'),
-                    'regulation_name': regulation_result.get('regulation_name'),
-                    'has_metadata': doc_analysis.get('metadata') is not None
+                    'source_url': doc_analysis.get('source_url'),
+                    'processed_at': doc_analysis.get('processed_at'),
+                    'metadata': doc_analysis.get('metadata')
                 })
         
         # Save summary for country
@@ -406,8 +409,7 @@ class FileMetadataProcessor:
             'total_esg_relevant_documents': total_esg_relevant_docs,
             'esg_relevance_rate': f"{(total_esg_relevant_docs/total_processed_docs*100):.1f}%" if total_processed_docs > 0 else "0%",
             'processed_at': datetime.now().isoformat(),
-            'analyzed_documents': analyzed_documents,
-            'regulations': country_results
+            'analyzed_documents': analyzed_documents
         }
         
         summary_file = country_output_dir / f"{self.safe_folder_name(country)}_summary.json"
