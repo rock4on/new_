@@ -143,6 +143,7 @@ class FileMetadataProcessor:
             "word_count": len(extracted_text.split()),
             "esg_relevant": esg_relevant,
             "esg_match_score": match_score,
+            "source_url": document_url,  # Add source URL to the document record
             "processed_at": datetime.now().isoformat(),
             "metadata": None
         }
@@ -188,9 +189,25 @@ class FileMetadataProcessor:
                 print(f"Warning: Could not load spider summary from {spider_file}: {e}")
         return {}
     
-    def get_document_url(self, spider_summary: Dict[str, Any], file_name: str) -> str:
-        """Get URL for a specific document from spider summary, fallback to 'pdf' if not found"""
+    def get_country_spider_summary(self, country_folder: Path) -> Dict[str, Any]:
+        """Get spider summary from any regulation folder in the country (for downloads folder)"""
+        regulation_folders = [d for d in country_folder.iterdir() if d.is_dir() and d.name != "downloads"]
+        
+        for reg_folder in regulation_folders:
+            spider_summary = self.load_spider_summary(reg_folder)
+            if spider_summary:
+                return spider_summary
+        
+        return {}
+    
+    def get_document_url(self, spider_summary: Dict[str, Any], file_name: str, regulation_info: Dict[str, Any] = None) -> str:
+        """Get URL for a specific document from spider summary, fallback to start_urls if not found"""
         if not spider_summary:
+            # Fallback to start_urls from regulation_info
+            if regulation_info and 'start_urls' in regulation_info:
+                start_urls = regulation_info['start_urls']
+                if isinstance(start_urls, list) and start_urls:
+                    return start_urls[0]
             return "pdf"
         
         # Look for the file in spider summary results
@@ -199,10 +216,16 @@ class FileMetadataProcessor:
             if result.get('url', '').endswith(file_name) or file_name in result.get('url', ''):
                 return result.get('url', 'pdf')
         
-        # If not found, return 'pdf' as fallback
+        # If not found in results, fallback to start_urls
+        if regulation_info and 'start_urls' in regulation_info:
+            start_urls = regulation_info['start_urls']
+            if isinstance(start_urls, list) and start_urls:
+                return start_urls[0]
+        
+        # Final fallback
         return "pdf"
     
-    def process_regulation_folder(self, country: str, regulation_folder: Path, use_llm: bool = True) -> Dict[str, Any]:
+    def process_regulation_folder(self, country: str, regulation_folder: Path, country_folder: Path, use_llm: bool = True) -> Dict[str, Any]:
         """Process all documents in a regulation folder - matches regulation_filter.py structure"""
         
         print(f"\n🔄 Processing: [{country}] {regulation_folder.name}")
@@ -210,6 +233,12 @@ class FileMetadataProcessor:
         # Load regulation info and spider summary
         reg_info = self.load_regulation_info(regulation_folder)
         spider_summary = self.load_spider_summary(regulation_folder)
+        
+        # Special handling for downloads folder - use spider summary from other folders
+        if regulation_folder.name == "downloads" and not spider_summary:
+            spider_summary = self.get_country_spider_summary(country_folder)
+            print(f"  Using spider summary from other folders for downloads")
+        
         regulation_name = reg_info.get('regulation_name', regulation_folder.name)
         
         # Find all document files (same as regulation_filter.py)
@@ -231,7 +260,7 @@ class FileMetadataProcessor:
         for doc_file in all_files:
             try:
                 # Get the document URL from spider summary
-                document_url = self.get_document_url(spider_summary, doc_file.name)
+                document_url = self.get_document_url(spider_summary, doc_file.name, reg_info)
                 
                 result = self.process_file(doc_file, country, regulation_name, use_llm, document_url)
                 if result:
@@ -309,7 +338,7 @@ class FileMetadataProcessor:
             
             # Process each regulation in this country
             for regulation_folder in regulation_folders:
-                result = self.process_regulation_folder(country, regulation_folder, use_llm)
+                result = self.process_regulation_folder(country, regulation_folder, country_folder, use_llm)
                 
                 if result:
                     country_results.append(result)
@@ -353,6 +382,21 @@ class FileMetadataProcessor:
         total_esg_relevant_docs = sum(r['esg_relevant_documents'] for r in country_results)
         total_docs_found = sum(r['total_documents'] for r in country_results)
         
+        # Collect all analyzed documents from all regulation folders
+        analyzed_documents = []
+        for regulation_result in country_results:
+            for doc_analysis in regulation_result.get('document_analyses', []):
+                analyzed_documents.append({
+                    'file_name': doc_analysis.get('file_name'),
+                    'file_type': doc_analysis.get('file_type'),
+                    'esg_relevant': doc_analysis.get('esg_relevant', False),
+                    'esg_match_score': doc_analysis.get('esg_match_score', 0),
+                    'source_url': doc_analysis.get('source_url'),  # Use source_url from document record
+                    'regulation_folder': regulation_result.get('regulation_folder'),
+                    'regulation_name': regulation_result.get('regulation_name'),
+                    'has_metadata': doc_analysis.get('metadata') is not None
+                })
+        
         # Save summary for country
         country_summary = {
             'country': country,
@@ -362,6 +406,7 @@ class FileMetadataProcessor:
             'total_esg_relevant_documents': total_esg_relevant_docs,
             'esg_relevance_rate': f"{(total_esg_relevant_docs/total_processed_docs*100):.1f}%" if total_processed_docs > 0 else "0%",
             'processed_at': datetime.now().isoformat(),
+            'analyzed_documents': analyzed_documents,
             'regulations': country_results
         }
         
