@@ -367,167 +367,104 @@ def merge_with_original_excel(results: Dict[str, Any], original_excel_path: str,
         df_original = pd.read_excel(original_excel_path)
         print(f"  📋 Original Excel: {len(df_original)} rows")
         
-        # Create AI data mapping by row index extracted from folder names
-        ai_mapping = {}
-        print(f"  🔍 DEBUG: Processing {len(results['country_summaries'])} countries from AI results")
+        # Create AI data mapping by row index - direct mapping from folder names
+        ai_data_by_row = {}
+        print(f"  🔍 Processing {len(results['country_summaries'])} countries for row mapping")
         
         for country, country_info in results['country_summaries'].items():
             country_file = Path(country_info['file'])
-            print(f"    🔍 DEBUG: Processing country '{country}', file: {country_file}")
-            print(f"    🔍 DEBUG: File exists: {country_file.exists()}")
+            print(f"  📂 Processing {country} from file: {country_file.name}")
             
             if country_file.exists():
                 try:
                     with open(country_file, 'r', encoding='utf-8') as f:
-                        country_data = json.load(f)
+                        ai_data = json.load(f)
                     
-                    print(f"    🔍 DEBUG: Loaded country data, keys: {list(country_data.keys())}")
+                    # Extract row number from the country folder name in metadata
+                    country_folder_name = ai_data.get('processing_metadata', {}).get('country_folder_name', '')
+                    row_number = extract_row_index_from_country_name(country_folder_name)
                     
-                    # Extract row index directly from country folder name
-                    country_folder_name = country_data.get('processing_metadata', {}).get('country_folder_name', '')
-                    print(f"      🔍 DEBUG: Country folder name from metadata: '{country_folder_name}'")
-                    
-                    row_index = extract_row_index_from_country_name(country_folder_name)
-                    print(f"      🔍 DEBUG: Extracted row index: {row_index}")
-                    
-                    # Fallback to stored row index if folder name parsing fails
-                    if row_index is None:
-                        row_index = country_data.get('processing_metadata', {}).get('excel_row_index')
-                        print(f"      🔍 DEBUG: Fallback row index from metadata: {row_index}")
-                    
-                    # Also check other possible locations for row index
-                    if row_index is None:
-                        row_index = country_data.get('excel_row_index')
-                        print(f"      🔍 DEBUG: Row index from country_data root: {row_index}")
-                    
-                    # Map this row index to this country's AI data
-                    if isinstance(row_index, int):
-                        ai_mapping[row_index] = country_data
-                        print(f"    ✅ Mapped {country_folder_name} → Excel row {row_index}")
-                        
-                        # Verify the AI data has the expected fields
-                        print(f"      🔍 DEBUG: AI data check - unique_id: '{country_data.get('unique_id', 'MISSING')}'")
-                        print(f"      🔍 DEBUG: AI data check - confidence_score: {country_data.get('confidence_score', 'MISSING')}")
-                        print(f"      🔍 DEBUG: AI data check - regulation_name: '{country_data.get('regulation_name', 'MISSING')}'")
+                    if row_number:
+                        ai_data_by_row[row_number] = ai_data
+                        print(f"    ✅ Mapped row {row_number} to {country} AI data")
                     else:
-                        print(f"    ❌ Could not extract row index from: {country_folder_name}")
-                        print(f"      🔍 DEBUG: Full country_data keys: {list(country_data.keys())}")
-                        if 'processing_metadata' in country_data:
-                            print(f"      🔍 DEBUG: processing_metadata keys: {list(country_data['processing_metadata'].keys())}")
-                            
+                        print(f"    ❌ Could not extract row number from folder: {country_folder_name}")
+                        
                 except Exception as e:
-                    print(f"  ❌ Warning: Could not load AI data for {country}: {e}")
+                    print(f"    ❌ Error loading {country}: {e}")
             else:
-                print(f"    ❌ File does not exist: {country_file}")
+                print(f"    ❌ File not found: {country_file}")
         
-        print(f"  🤖 AI data available for {len(ai_mapping)} rows")
-        print(f"  🔍 DEBUG: AI mapping keys (Excel rows): {sorted(ai_mapping.keys())}")
+        print(f"  📊 AI data mapped for rows: {sorted(ai_data_by_row.keys())}")
         
-        # Debug: Show the Excel data structure
-        print(f"  🔍 DEBUG: Original Excel has {len(df_original)} data rows")
-        print(f"  🔍 DEBUG: Excel row mapping will be:")
-        for idx in range(min(5, len(df_original))):  # Show first 5 rows
-            excel_row_num = idx + 2
-            print(f"    pandas index {idx} → Excel row {excel_row_num}")
+        # Start with the original Excel data
+        df_combined = df_original.copy()
         
-        # Create combined data for Excel
-        combined_data = []
+        # Add AI columns to the DataFrame
+        ai_columns = [
+            'AI_Unique_ID', 'AI_Regulation_Type', 'AI_Issuing_Body', 'AI_Publication_Date',
+            'AI_Regulation_Status', 'AI_Effective_Dates', 'AI_ESG_Focus_Areas', 'AI_Reporting_Frequency',
+            'AI_Document_Sources', 'AI_Confidence_Score', 'AI_Filing_Mechanisms', 'AI_Assurance_Requirements',
+            'AI_Financial_Integration', 'AI_Executive_Summary', 'AI_Top_3_Key_Requirements', 
+            'AI_Scope_and_Applicability', 'AI_Processing_Status', 'AI_Processing_Date', 'AI_Model_Used',
+            'AI_Total_Pages_Analyzed', 'AI_Key_Gaps_Identified'
+        ]
         
-        for idx, row in df_original.iterrows():
-            # Start with original data
-            combined_row = row.to_dict()
+        # Initialize all AI columns with default values
+        for col in ai_columns:
+            df_combined[col] = 'No ESG validated file found' if col == 'AI_Processing_Status' else ''
+        
+        # Fill in AI data for rows that have it
+        for row_number, ai_data in ai_data_by_row.items():
+            # Convert Excel row number to pandas index (row 2 becomes index 0, row 3 becomes index 1, etc.)
+            pandas_index = row_number - 2
             
-            # Excel row numbers: pandas index 0 = Excel row 1, pandas index 1 = Excel row 2, etc.
-            # But our folder names use the actual Excel row number (including header)
-            # So if Excel has a header in row 1, data starts at row 2
-            # pandas index 0 should map to Excel row 2, pandas index 1 to Excel row 3, etc.
-            excel_row_number = idx + 2  # Convert pandas index to Excel row number (accounting for header)
-            
-            print(f"  🔍 DEBUG: Processing Excel row {excel_row_number} (pandas index {idx})")
-            print(f"    🔍 DEBUG: Checking if row {excel_row_number} in ai_mapping: {excel_row_number in ai_mapping}")
-            
-            # Add AI data if available for this row
-            if excel_row_number in ai_mapping:
-                ai_data = ai_mapping[excel_row_number]
-                print(f"    ✅ Found AI data for row {excel_row_number}")
+            if 0 <= pandas_index < len(df_combined):
+                print(f"  📝 Adding AI data to Excel row {row_number} (pandas index {pandas_index})")
                 
-                # Add AI-generated columns
-                ai_columns = {
-                    'AI_Unique_ID': ai_data.get('unique_id', ''),
-                    'AI_Regulation_Type': ai_data.get('regulation_type', ''),
-                    'AI_Issuing_Body': ai_data.get('issuing_body', ''),
-                    'AI_Publication_Date': ai_data.get('publication_date', ''),
-                    'AI_Regulation_Status': ai_data.get('regulation_status', ''),
-                    'AI_Effective_Dates': ai_data.get('effective_dates', ''),
-                    'AI_ESG_Focus_Areas': ', '.join(ai_data.get('esg_focus_areas', [])) if isinstance(ai_data.get('esg_focus_areas'), list) else str(ai_data.get('esg_focus_areas', '')),
-                    'AI_Reporting_Frequency': ai_data.get('reporting_frequency', ''),
-                    'AI_Document_Sources': ai_data.get('document_sources', 0),
-                    'AI_Confidence_Score': ai_data.get('confidence_score', 0),
-                    'AI_Filing_Mechanisms': ai_data.get('filing_mechanisms', ''),
-                    'AI_Assurance_Requirements': ai_data.get('assurance_requirements', ''),
-                    'AI_Financial_Integration': ai_data.get('financial_integration', ''),
-                    'AI_Executive_Summary': str(ai_data.get('executive_summary', ''))[:300] + '...' if len(str(ai_data.get('executive_summary', ''))) > 300 else str(ai_data.get('executive_summary', '')),
-                    'AI_Top_3_Key_Requirements': ', '.join(ai_data.get('key_requirements', [])[:3]) if isinstance(ai_data.get('key_requirements'), list) else '',
-                    'AI_Scope_and_Applicability': str(ai_data.get('scope_and_applicability', ''))[:200] + '...' if len(str(ai_data.get('scope_and_applicability', ''))) > 200 else str(ai_data.get('scope_and_applicability', '')),
-                    'AI_Processing_Status': 'AI Processed',
-                    'AI_Processing_Date': ai_data.get('processing_metadata', {}).get('processing_date', ''),
-                    'AI_Model_Used': ai_data.get('processing_metadata', {}).get('ai_model_used', ''),
-                    'AI_Total_Pages_Analyzed': ai_data.get('total_pages_analyzed', 0),
-                    'AI_Key_Gaps_Identified': ', '.join(ai_data.get('key_gaps_identified', [])) if isinstance(ai_data.get('key_gaps_identified'), list) else str(ai_data.get('key_gaps_identified', ''))
-                }
+                # Set AI column values for this row
+                df_combined.loc[pandas_index, 'AI_Unique_ID'] = ai_data.get('unique_id', '')
+                df_combined.loc[pandas_index, 'AI_Regulation_Type'] = ai_data.get('regulation_type', '')
+                df_combined.loc[pandas_index, 'AI_Issuing_Body'] = ai_data.get('issuing_body', '')
+                df_combined.loc[pandas_index, 'AI_Publication_Date'] = ai_data.get('publication_date', '')
+                df_combined.loc[pandas_index, 'AI_Regulation_Status'] = ai_data.get('regulation_status', '')
+                df_combined.loc[pandas_index, 'AI_Effective_Dates'] = ai_data.get('effective_dates', '')
                 
-                print(f"      🔍 DEBUG: Adding AI columns. Status: {ai_columns['AI_Processing_Status']}")
-                print(f"      🔍 DEBUG: Confidence Score: {ai_columns['AI_Confidence_Score']}")
-                print(f"      🔍 DEBUG: Unique ID: {ai_columns['AI_Unique_ID']}")
+                esg_areas = ai_data.get('esg_focus_areas', [])
+                df_combined.loc[pandas_index, 'AI_ESG_Focus_Areas'] = ', '.join(esg_areas) if isinstance(esg_areas, list) else str(esg_areas)
                 
-                combined_row.update(ai_columns)
+                df_combined.loc[pandas_index, 'AI_Reporting_Frequency'] = ai_data.get('reporting_frequency', '')
+                df_combined.loc[pandas_index, 'AI_Document_Sources'] = ai_data.get('document_sources', 0)
+                df_combined.loc[pandas_index, 'AI_Confidence_Score'] = ai_data.get('confidence_score', 0)
+                df_combined.loc[pandas_index, 'AI_Filing_Mechanisms'] = ai_data.get('filing_mechanisms', '')
+                df_combined.loc[pandas_index, 'AI_Assurance_Requirements'] = ai_data.get('assurance_requirements', '')
+                df_combined.loc[pandas_index, 'AI_Financial_Integration'] = ai_data.get('financial_integration', '')
+                
+                exec_summary = str(ai_data.get('executive_summary', ''))
+                df_combined.loc[pandas_index, 'AI_Executive_Summary'] = exec_summary[:300] + '...' if len(exec_summary) > 300 else exec_summary
+                
+                key_reqs = ai_data.get('key_requirements', [])
+                df_combined.loc[pandas_index, 'AI_Top_3_Key_Requirements'] = ', '.join(key_reqs[:3]) if isinstance(key_reqs, list) else ''
+                
+                scope = str(ai_data.get('scope_and_applicability', ''))
+                df_combined.loc[pandas_index, 'AI_Scope_and_Applicability'] = scope[:200] + '...' if len(scope) > 200 else scope
+                
+                df_combined.loc[pandas_index, 'AI_Processing_Status'] = 'AI Processed'
+                df_combined.loc[pandas_index, 'AI_Processing_Date'] = ai_data.get('processing_metadata', {}).get('processing_date', '')
+                df_combined.loc[pandas_index, 'AI_Model_Used'] = ai_data.get('processing_metadata', {}).get('ai_model_used', '')
+                df_combined.loc[pandas_index, 'AI_Total_Pages_Analyzed'] = ai_data.get('total_pages_analyzed', 0)
+                
+                gaps = ai_data.get('key_gaps_identified', [])
+                df_combined.loc[pandas_index, 'AI_Key_Gaps_Identified'] = ', '.join(gaps) if isinstance(gaps, list) else str(gaps)
+                
             else:
-                print(f"    ❌ No AI data found for row {excel_row_number}")
-                # No AI data available - mark as not processed
-                combined_row.update({
-                    'AI_Unique_ID': '',
-                    'AI_Regulation_Type': '',
-                    'AI_Issuing_Body': '',
-                    'AI_Publication_Date': '',
-                    'AI_Regulation_Status': '',
-                    'AI_Effective_Dates': '',
-                    'AI_ESG_Focus_Areas': '',
-                    'AI_Reporting_Frequency': '',
-                    'AI_Document_Sources': 0,
-                    'AI_Confidence_Score': 0,
-                    'AI_Filing_Mechanisms': '',
-                    'AI_Assurance_Requirements': '',
-                    'AI_Financial_Integration': '',
-                    'AI_Executive_Summary': '',
-                    'AI_Top_3_Key_Requirements': '',
-                    'AI_Scope_and_Applicability': '',
-                    'AI_Processing_Status': 'No ESG validated file found',
-                    'AI_Processing_Date': '',
-                    'AI_Model_Used': '',
-                    'AI_Total_Pages_Analyzed': 0,
-                    'AI_Key_Gaps_Identified': ''
-                })
-            
-            combined_data.append(combined_row)
-            
-            # Debug: Show what was added for this row
-            status = combined_row.get('AI_Processing_Status', 'Unknown')
-            print(f"    🔍 DEBUG: Row {excel_row_number} final status: {status}")
-            if status == 'AI Processed':
-                print(f"      ✅ Successfully added AI data to Excel row {excel_row_number}")
+                print(f"    ⚠️  Row {row_number} is outside DataFrame range (pandas index {pandas_index})")
         
-        # Create DataFrame
-        df_combined = pd.DataFrame(combined_data)
-        
-        # Debug: Check what we have in the final DataFrame
-        ai_processed_count = len(df_combined[df_combined.get('AI_Processing_Status', '') == 'AI Processed'])
-        print(f"  🔍 DEBUG: Final DataFrame has {len(df_combined)} rows, {ai_processed_count} with 'AI Processed' status")
-        
-        if ai_processed_count > 0:
-            ai_processed_rows = df_combined[df_combined['AI_Processing_Status'] == 'AI Processed']
-            print(f"  🔍 DEBUG: AI Processed rows details:")
-            for idx, row in ai_processed_rows.iterrows():
-                print(f"    Row {idx + 2}: AI_Unique_ID='{row.get('AI_Unique_ID', '')}', AI_Confidence_Score={row.get('AI_Confidence_Score', 0)}")
+        # Convert back to list of dictionaries for statistics
+        combined_data = df_combined.to_dict('records')
+        # Count processed rows for statistics
+        ai_processed_count = len([row for row in combined_data if row.get('AI_Processing_Status') == 'AI Processed'])
+        print(f"  ✅ Successfully added AI data to {ai_processed_count} rows")
         
         # Create Excel with original + AI columns
         excel_filename = output_dir / "combined_original_and_ai_analysis.xlsx"
@@ -926,6 +863,10 @@ Output:
         # Create combined Excel with original + AI data if original Excel provided
         combined_excel_file = None
         if hasattr(consolidator, 'original_excel_path') and consolidator.original_excel_path:
+            print(f"\n🔗 STARTING EXCEL MERGE")
+            print(f"  🔍 DEBUG: results['country_summaries'] has {len(results.get('country_summaries', {}))} countries")
+            for country, info in results.get('country_summaries', {}).items():
+                print(f"    - {country}: file={info.get('file', 'MISSING')}")
             combined_excel_file = merge_with_original_excel(results, consolidator.original_excel_path, output_dir)
         
         # Print final summary
