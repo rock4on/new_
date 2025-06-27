@@ -351,7 +351,9 @@ ANALYSIS FOCUS:
                 "fallback_reason": "AI consolidation failed",
                 "source_documents_total": len(country_data['all_documents']),
                 "esg_documents_analyzed": len(esg_docs),
-                "processing_date": datetime.now().isoformat()
+                "processing_date": datetime.now().isoformat(),
+                "excel_row_index": country_data.get('excel_row_index'),  # IMPORTANT: Include row index
+                "country_folder_name": country_data.get('country_folder_name')  # IMPORTANT: Include folder name
             }
         }
 
@@ -367,32 +369,66 @@ def merge_with_original_excel(results: Dict[str, Any], original_excel_path: str,
         
         # Create AI data mapping by row index extracted from folder names
         ai_mapping = {}
+        print(f"  🔍 DEBUG: Processing {len(results['country_summaries'])} countries from AI results")
+        
         for country, country_info in results['country_summaries'].items():
             country_file = Path(country_info['file'])
+            print(f"    🔍 DEBUG: Processing country '{country}', file: {country_file}")
+            print(f"    🔍 DEBUG: File exists: {country_file.exists()}")
+            
             if country_file.exists():
                 try:
                     with open(country_file, 'r', encoding='utf-8') as f:
                         country_data = json.load(f)
                     
+                    print(f"    🔍 DEBUG: Loaded country data, keys: {list(country_data.keys())}")
+                    
                     # Extract row index directly from country folder name
                     country_folder_name = country_data.get('processing_metadata', {}).get('country_folder_name', '')
+                    print(f"      🔍 DEBUG: Country folder name from metadata: '{country_folder_name}'")
+                    
                     row_index = extract_row_index_from_country_name(country_folder_name)
+                    print(f"      🔍 DEBUG: Extracted row index: {row_index}")
                     
                     # Fallback to stored row index if folder name parsing fails
                     if row_index is None:
                         row_index = country_data.get('processing_metadata', {}).get('excel_row_index')
+                        print(f"      🔍 DEBUG: Fallback row index from metadata: {row_index}")
+                    
+                    # Also check other possible locations for row index
+                    if row_index is None:
+                        row_index = country_data.get('excel_row_index')
+                        print(f"      🔍 DEBUG: Row index from country_data root: {row_index}")
                     
                     # Map this row index to this country's AI data
                     if isinstance(row_index, int):
                         ai_mapping[row_index] = country_data
-                        print(f"    📋 Mapped {country_folder_name} → Excel row {row_index}")
+                        print(f"    ✅ Mapped {country_folder_name} → Excel row {row_index}")
+                        
+                        # Verify the AI data has the expected fields
+                        print(f"      🔍 DEBUG: AI data check - unique_id: '{country_data.get('unique_id', 'MISSING')}'")
+                        print(f"      🔍 DEBUG: AI data check - confidence_score: {country_data.get('confidence_score', 'MISSING')}")
+                        print(f"      🔍 DEBUG: AI data check - regulation_name: '{country_data.get('regulation_name', 'MISSING')}'")
                     else:
-                        print(f"    ⚠️  Could not extract row index from: {country_folder_name}")
+                        print(f"    ❌ Could not extract row index from: {country_folder_name}")
+                        print(f"      🔍 DEBUG: Full country_data keys: {list(country_data.keys())}")
+                        if 'processing_metadata' in country_data:
+                            print(f"      🔍 DEBUG: processing_metadata keys: {list(country_data['processing_metadata'].keys())}")
                             
                 except Exception as e:
-                    print(f"  Warning: Could not load AI data for {country}: {e}")
+                    print(f"  ❌ Warning: Could not load AI data for {country}: {e}")
+            else:
+                print(f"    ❌ File does not exist: {country_file}")
         
         print(f"  🤖 AI data available for {len(ai_mapping)} rows")
+        print(f"  🔍 DEBUG: AI mapping keys (Excel rows): {sorted(ai_mapping.keys())}")
+        
+        # Debug: Show the Excel data structure
+        print(f"  🔍 DEBUG: Original Excel has {len(df_original)} data rows")
+        print(f"  🔍 DEBUG: Excel row mapping will be:")
+        for idx in range(min(5, len(df_original))):  # Show first 5 rows
+            excel_row_num = idx + 2
+            print(f"    pandas index {idx} → Excel row {excel_row_num}")
         
         # Create combined data for Excel
         combined_data = []
@@ -401,15 +437,22 @@ def merge_with_original_excel(results: Dict[str, Any], original_excel_path: str,
             # Start with original data
             combined_row = row.to_dict()
             
-            # Excel is 0-indexed, but our row numbers start from 1 (Excel row 2 = index 1)
-            excel_row_number = idx + 2  # Convert pandas index to Excel row number
+            # Excel row numbers: pandas index 0 = Excel row 1, pandas index 1 = Excel row 2, etc.
+            # But our folder names use the actual Excel row number (including header)
+            # So if Excel has a header in row 1, data starts at row 2
+            # pandas index 0 should map to Excel row 2, pandas index 1 to Excel row 3, etc.
+            excel_row_number = idx + 2  # Convert pandas index to Excel row number (accounting for header)
+            
+            print(f"  🔍 DEBUG: Processing Excel row {excel_row_number} (pandas index {idx})")
+            print(f"    🔍 DEBUG: Checking if row {excel_row_number} in ai_mapping: {excel_row_number in ai_mapping}")
             
             # Add AI data if available for this row
             if excel_row_number in ai_mapping:
                 ai_data = ai_mapping[excel_row_number]
+                print(f"    ✅ Found AI data for row {excel_row_number}")
                 
                 # Add AI-generated columns
-                combined_row.update({
+                ai_columns = {
                     'AI_Unique_ID': ai_data.get('unique_id', ''),
                     'AI_Regulation_Type': ai_data.get('regulation_type', ''),
                     'AI_Issuing_Body': ai_data.get('issuing_body', ''),
@@ -431,8 +474,15 @@ def merge_with_original_excel(results: Dict[str, Any], original_excel_path: str,
                     'AI_Model_Used': ai_data.get('processing_metadata', {}).get('ai_model_used', ''),
                     'AI_Total_Pages_Analyzed': ai_data.get('total_pages_analyzed', 0),
                     'AI_Key_Gaps_Identified': ', '.join(ai_data.get('key_gaps_identified', [])) if isinstance(ai_data.get('key_gaps_identified'), list) else str(ai_data.get('key_gaps_identified', ''))
-                })
+                }
+                
+                print(f"      🔍 DEBUG: Adding AI columns. Status: {ai_columns['AI_Processing_Status']}")
+                print(f"      🔍 DEBUG: Confidence Score: {ai_columns['AI_Confidence_Score']}")
+                print(f"      🔍 DEBUG: Unique ID: {ai_columns['AI_Unique_ID']}")
+                
+                combined_row.update(ai_columns)
             else:
+                print(f"    ❌ No AI data found for row {excel_row_number}")
                 # No AI data available - mark as not processed
                 combined_row.update({
                     'AI_Unique_ID': '',
@@ -459,9 +509,25 @@ def merge_with_original_excel(results: Dict[str, Any], original_excel_path: str,
                 })
             
             combined_data.append(combined_row)
+            
+            # Debug: Show what was added for this row
+            status = combined_row.get('AI_Processing_Status', 'Unknown')
+            print(f"    🔍 DEBUG: Row {excel_row_number} final status: {status}")
+            if status == 'AI Processed':
+                print(f"      ✅ Successfully added AI data to Excel row {excel_row_number}")
         
         # Create DataFrame
         df_combined = pd.DataFrame(combined_data)
+        
+        # Debug: Check what we have in the final DataFrame
+        ai_processed_count = len(df_combined[df_combined.get('AI_Processing_Status', '') == 'AI Processed'])
+        print(f"  🔍 DEBUG: Final DataFrame has {len(df_combined)} rows, {ai_processed_count} with 'AI Processed' status")
+        
+        if ai_processed_count > 0:
+            ai_processed_rows = df_combined[df_combined['AI_Processing_Status'] == 'AI Processed']
+            print(f"  🔍 DEBUG: AI Processed rows details:")
+            for idx, row in ai_processed_rows.iterrows():
+                print(f"    Row {idx + 2}: AI_Unique_ID='{row.get('AI_Unique_ID', '')}', AI_Confidence_Score={row.get('AI_Confidence_Score', 0)}")
         
         # Create Excel with original + AI columns
         excel_filename = output_dir / "combined_original_and_ai_analysis.xlsx"
@@ -532,8 +598,15 @@ def extract_row_index_from_country_name(country_folder_name: str) -> int:
     """Helper function to extract row index from country folder name"""
     try:
         match = re.match(r'Row(\d+)_', country_folder_name)
-        return int(match.group(1)) if match else None
-    except:
+        if match:
+            row_num = int(match.group(1))
+            print(f"🔍 DEBUG: Extracted row {row_num} from folder '{country_folder_name}'")
+            return row_num
+        else:
+            print(f"🔍 DEBUG: No row pattern found in folder '{country_folder_name}'")
+            return None
+    except Exception as e:
+        print(f"🔍 DEBUG: Error extracting row from '{country_folder_name}': {e}")
         return None
 
 
@@ -802,6 +875,7 @@ Output:
         
         # Process each country
         for country_folder in country_folders:
+            print(f"\n📂 Processing country folder: {country_folder.name}")
             try:
                 # Load country data
                 country_data = consolidator.load_country_data(country_folder)
