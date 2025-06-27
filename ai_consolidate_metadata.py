@@ -365,7 +365,7 @@ def merge_with_original_excel(results: Dict[str, Any], original_excel_path: str,
         df_original = pd.read_excel(original_excel_path)
         print(f"  📋 Original Excel: {len(df_original)} rows")
         
-        # Create AI data mapping by row index
+        # Create AI data mapping by row index extracted from folder names
         ai_mapping = {}
         for country, country_info in results['country_summaries'].items():
             country_file = Path(country_info['file'])
@@ -374,12 +374,20 @@ def merge_with_original_excel(results: Dict[str, Any], original_excel_path: str,
                     with open(country_file, 'r', encoding='utf-8') as f:
                         country_data = json.load(f)
                     
-                    # Get row index for this country
-                    row_index = country_data.get('processing_metadata', {}).get('excel_row_index')
+                    # Extract row index directly from country folder name
+                    country_folder_name = country_data.get('processing_metadata', {}).get('country_folder_name', '')
+                    row_index = extract_row_index_from_country_name(country_folder_name)
+                    
+                    # Fallback to stored row index if folder name parsing fails
+                    if row_index is None:
+                        row_index = country_data.get('processing_metadata', {}).get('excel_row_index')
                     
                     # Map this row index to this country's AI data
                     if isinstance(row_index, int):
                         ai_mapping[row_index] = country_data
+                        print(f"    📋 Mapped {country_folder_name} → Excel row {row_index}")
+                    else:
+                        print(f"    ⚠️  Could not extract row index from: {country_folder_name}")
                             
                 except Exception as e:
                     print(f"  Warning: Could not load AI data for {country}: {e}")
@@ -517,6 +525,15 @@ def merge_with_original_excel(results: Dict[str, Any], original_excel_path: str,
         
     except Exception as e:
         print(f"  ❌ Error creating combined Excel: {e}")
+        return None
+
+
+def extract_row_index_from_country_name(country_folder_name: str) -> int:
+    """Helper function to extract row index from country folder name"""
+    try:
+        match = re.match(r'Row(\d+)_', country_folder_name)
+        return int(match.group(1)) if match else None
+    except:
         return None
 
 
@@ -760,6 +777,16 @@ Output:
             return False
         
         print(f"Found {len(country_folders)} countries to process")
+        
+        # Show folder name → row mapping for verification
+        print("\n📋 Folder → Excel Row Mapping:")
+        for folder in country_folders:
+            row_idx = extract_row_index_from_country_name(folder.name)
+            if row_idx:
+                clean_country = re.sub(r'^Row\d+_', '', folder.name)
+                print(f"  {folder.name} → Excel row {row_idx} ({clean_country})")
+            else:
+                print(f"  {folder.name} → No row number detected")
         
         results = {
             'consolidation_metadata': {
