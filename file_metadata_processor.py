@@ -704,6 +704,10 @@ class FileMetadataProcessor:
         country_output_dir = self.output_dir / self.safe_folder_name(country)
         country_output_dir.mkdir(exist_ok=True)
         
+        # Create ESG-relevant folder for this country
+        esg_output_dir = self.output_dir / "esg_relevant_by_country" / self.safe_folder_name(country)
+        esg_output_dir.mkdir(parents=True, exist_ok=True)
+        
         # Calculate totals
         total_processed_docs = sum(r['processed_documents'] for r in country_results)
         total_esg_relevant_docs = sum(r['esg_relevant_documents'] for r in country_results)
@@ -744,6 +748,8 @@ class FileMetadataProcessor:
             json.dump(country_summary, f, indent=2, ensure_ascii=False)
         
         # Save individual regulation analyses
+        esg_relevant_documents = []  # Track ESG documents for separate folder
+        
         for regulation_result in country_results:
             regulation_name = regulation_result['regulation_name']
             safe_reg_name = self.safe_folder_name(regulation_name)
@@ -771,8 +777,21 @@ class FileMetadataProcessor:
                 doc_file = reg_folder / f"{safe_filename}_analysis.json"
                 with open(doc_file, 'w', encoding='utf-8') as f:
                     json.dump(analysis, f, indent=2, ensure_ascii=False)
+                
+                # Collect ESG relevant documents for separate folder
+                if analysis.get('esg_relevant', False):
+                    esg_doc = analysis.copy()
+                    esg_doc['regulation_name'] = regulation_name
+                    esg_doc['country'] = country
+                    esg_relevant_documents.append(esg_doc)
+        
+        # Save ESG-relevant documents in separate country folder
+        if esg_relevant_documents:
+            self.save_esg_relevant_documents(country, esg_relevant_documents, esg_output_dir)
         
         print(f"💾 Saved results for {country}: {len(country_results)} regulations, {total_esg_relevant_docs} ESG relevant documents")
+        if esg_relevant_documents:
+            print(f"🎯 Saved {len(esg_relevant_documents)} ESG documents to: {esg_output_dir}")
     
     def generate_final_summary(self, all_results: List[Dict[str, Any]]):
         """Generate final summary report - matches regulation_filter.py structure"""
@@ -825,7 +844,148 @@ class FileMetadataProcessor:
         with open(summary_file, 'w', encoding='utf-8') as f:
             json.dump(final_summary, f, indent=2, ensure_ascii=False)
         
+        # Also create ESG-focused final summary
+        esg_summary_file = self.output_dir / "esg_relevant_by_country" / "esg_global_summary.json"
+        esg_summary_file.parent.mkdir(exist_ok=True)
+        
+        esg_global_summary = {
+            'analysis_metadata': {
+                'analysis_date': datetime.now().isoformat(),
+                'analysis_type': 'esg_focused_metadata_processing',
+                'esg_threshold_used': 30
+            },
+            'global_esg_statistics': {
+                'total_countries_with_esg': len([country for country, data in final_summary['country_breakdown'].items() 
+                                               if data['esg_relevant_document_count'] > 0]),
+                'total_esg_documents': sum(data['esg_relevant_document_count'] for data in final_summary['country_breakdown'].values()),
+                'countries_by_esg_content': {
+                    country: data['esg_relevant_document_count'] 
+                    for country, data in final_summary['country_breakdown'].items() 
+                    if data['esg_relevant_document_count'] > 0
+                }
+            },
+            'esg_folder_structure': str(self.output_dir / "esg_relevant_by_country")
+        }
+        
+        with open(esg_summary_file, 'w', encoding='utf-8') as f:
+            json.dump(esg_global_summary, f, indent=2, ensure_ascii=False)
+        
         print(f"\n📊 Final summary saved to: {summary_file}")
+        print(f"🎯 ESG global summary saved to: {esg_summary_file}")
+    
+    def save_esg_relevant_documents(self, country: str, esg_documents: List[Dict[str, Any]], esg_output_dir: Path):
+        """Save ESG-relevant documents in a separate folder structure for easy access"""
+        print(f"🎯 Saving {len(esg_documents)} ESG relevant documents for {country}")
+        
+        # Group documents by regulation
+        by_regulation = {}
+        for doc in esg_documents:
+            reg_name = doc.get('regulation_name', 'unknown_regulation')
+            if reg_name not in by_regulation:
+                by_regulation[reg_name] = []
+            by_regulation[reg_name].append(doc)
+        
+        # Save documents grouped by regulation
+        for regulation_name, docs in by_regulation.items():
+            safe_reg_name = self.safe_folder_name(regulation_name)
+            reg_esg_dir = esg_output_dir / safe_reg_name
+            reg_esg_dir.mkdir(exist_ok=True)
+            
+            # Save regulation ESG summary
+            reg_esg_summary = {
+                'country': country,
+                'regulation_name': regulation_name,
+                'esg_document_count': len(docs),
+                'avg_esg_score': sum(doc.get('esg_match_score', 0) for doc in docs) / len(docs),
+                'processed_at': datetime.now().isoformat(),
+                'documents': []
+            }
+            
+            # Save individual ESG documents with enhanced metadata
+            for i, doc in enumerate(docs):
+                # Enhanced document record for ESG folder
+                esg_doc_record = {
+                    'file_name': doc.get('file_name'),
+                    'file_type': doc.get('file_type'),
+                    'regulation_name': regulation_name,
+                    'country': country,
+                    'esg_match_score': doc.get('esg_match_score'),
+                    'text_length': doc.get('text_length'),
+                    'word_count': doc.get('word_count'),
+                    'source_url': doc.get('source_url'),
+                    'processed_at': doc.get('processed_at'),
+                    'metadata': doc.get('metadata'),
+                    'extracted_text': doc.get('extracted_text'),  # Keep full text for AI processing
+                    'esg_keywords_found': self.extract_esg_keywords_found(doc.get('extracted_text', '')),
+                    'document_summary': self.create_document_summary(doc)
+                }
+                
+                # Save individual ESG document
+                safe_filename = self.safe_folder_name(doc.get('file_name', f'esg_doc_{i}').replace('.', '_'))
+                esg_doc_file = reg_esg_dir / f"{safe_filename}_esg.json"
+                with open(esg_doc_file, 'w', encoding='utf-8') as f:
+                    json.dump(esg_doc_record, f, indent=2, ensure_ascii=False)
+                
+                # Add to regulation summary (without full text to keep it lighter)
+                summary_record = esg_doc_record.copy()
+                summary_record.pop('extracted_text', None)  # Remove full text from summary
+                reg_esg_summary['documents'].append(summary_record)
+            
+            # Save regulation ESG summary
+            reg_summary_file = reg_esg_dir / "regulation_esg_summary.json"
+            with open(reg_summary_file, 'w', encoding='utf-8') as f:
+                json.dump(reg_esg_summary, f, indent=2, ensure_ascii=False)
+            
+            print(f"  📁 {regulation_name}: {len(docs)} ESG docs saved")
+        
+        # Create country-level ESG summary
+        country_esg_summary = {
+            'country': country,
+            'total_esg_documents': len(esg_documents),
+            'regulations_with_esg_content': len(by_regulation),
+            'avg_esg_score_country': sum(doc.get('esg_match_score', 0) for doc in esg_documents) / len(esg_documents),
+            'processed_at': datetime.now().isoformat(),
+            'regulation_breakdown': {
+                reg_name: {
+                    'document_count': len(docs),
+                    'avg_score': sum(doc.get('esg_match_score', 0) for doc in docs) / len(docs)
+                }
+                for reg_name, docs in by_regulation.items()
+            }
+        }
+        
+        country_summary_file = esg_output_dir / f"{country}_esg_summary.json"
+        with open(country_summary_file, 'w', encoding='utf-8') as f:
+            json.dump(country_esg_summary, f, indent=2, ensure_ascii=False)
+    
+    def extract_esg_keywords_found(self, text: str) -> List[str]:
+        """Extract which ESG keywords were actually found in the text"""
+        if not text:
+            return []
+        
+        text_lower = text.lower()
+        found_keywords = []
+        
+        for keyword in ESG_KEYWORDS:
+            if isinstance(keyword, str) and keyword.lower() in text_lower:
+                found_keywords.append(keyword)
+        
+        return found_keywords[:20]  # Limit to top 20 keywords
+    
+    def create_document_summary(self, doc: Dict[str, Any]) -> str:
+        """Create a brief summary of the document for ESG folder"""
+        file_name = doc.get('file_name', 'Unknown')
+        file_type = doc.get('file_type', 'Unknown')
+        esg_score = doc.get('esg_match_score', 0)
+        word_count = doc.get('word_count', 0)
+        
+        metadata = doc.get('metadata', {})
+        if metadata and isinstance(metadata, dict):
+            summary = metadata.get('summary', '')
+            if summary:
+                return f"{file_type.upper()} document '{file_name}' ({word_count} words, ESG score: {esg_score}): {summary[:200]}..."
+        
+        return f"{file_type.upper()} document '{file_name}' with {word_count} words and ESG relevance score of {esg_score}"
     
     def safe_folder_name(self, name: str) -> str:
         """Convert name to safe folder name"""
