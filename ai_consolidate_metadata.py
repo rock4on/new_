@@ -11,6 +11,8 @@ from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Any
 import argparse
+import pandas as pd
+import re
 
 # LangChain imports for LLM processing
 try:
@@ -112,6 +114,14 @@ ANALYSIS FOCUS:
         
         self.chain = self.consolidation_prompt | self.llm | self.parser
     
+    def extract_row_index_from_folder(self, folder_name: str) -> int:
+        """Extract Excel row index from folder name like 'Row5_Regulation_Name'"""
+        try:
+            match = re.match(r'Row(\d+)_', folder_name)
+            return int(match.group(1)) if match else None
+        except:
+            return None
+    
     def load_country_data(self, country_folder: Path) -> Dict[str, Any]:
         """Load all metadata analysis data for a country"""
         country_name = country_folder.name
@@ -127,21 +137,32 @@ ANALYSIS FOCUS:
         # Collect all document analyses from all regulations
         all_documents = []
         regulation_contexts = []
+        excel_row_indices = []  # Track Excel row indices
         
         regulation_folders = [d for d in country_folder.iterdir() if d.is_dir()]
         
         for reg_folder in regulation_folders:
             regulation_name = reg_folder.name
             
+            # Extract Excel row index from folder name
+            excel_row_index = self.extract_row_index_from_folder(regulation_name)
+            
             # Load regulation summary
             reg_summary_file = reg_folder / "regulation_summary.json"
             if reg_summary_file.exists():
                 with open(reg_summary_file, 'r', encoding='utf-8') as f:
                     reg_summary = json.load(f)
+                    # Use row index from summary if not found in folder name
+                    if excel_row_index is None:
+                        excel_row_index = reg_summary.get('excel_row_index', 'Unknown')
                     regulation_contexts.append({
                         'name': regulation_name,
-                        'summary': reg_summary
+                        'summary': reg_summary,
+                        'excel_row_index': excel_row_index
                     })
+            
+            if excel_row_index is not None:
+                excel_row_indices.append(excel_row_index)
             
             # Load all document analyses
             analysis_files = list(reg_folder.glob("*_analysis.json"))
@@ -150,6 +171,7 @@ ANALYSIS FOCUS:
                     with open(analysis_file, 'r', encoding='utf-8') as f:
                         doc_analysis = json.load(f)
                         doc_analysis['regulation_folder'] = regulation_name
+                        doc_analysis['excel_row_index'] = excel_row_index  # Add row index to documents
                         all_documents.append(doc_analysis)
                 except Exception as e:
                     print(f"  Warning: Could not load {analysis_file}: {e}")
@@ -159,11 +181,12 @@ ANALYSIS FOCUS:
             'country_summary': country_summary,
             'regulation_contexts': regulation_contexts,
             'all_documents': all_documents,
-            'esg_documents': [d for d in all_documents if d.get('esg_relevant', False)]
+            'esg_documents': [d for d in all_documents if d.get('esg_relevant', False)],
+            'excel_row_indices': excel_row_indices  # Include row indices for merging
         }
     
-    def prepare_analysis_text(self, country_data: Dict[str, Any]) -> Dict[str, str]:
-        """Prepare text for AI analysis"""
+    def prepare_analysis_text(self, country_data: Dict[str, Any], max_context_length: int = 15000) -> Dict[str, str]:
+        """Prepare text for AI analysis with context length management"""
         esg_documents = country_data['esg_documents']
         
         # Create regulation context summary
@@ -174,33 +197,76 @@ ANALYSIS FOCUS:
         for reg_ctx in country_data['regulation_contexts']:
             regulation_context += f"Regulation: {reg_ctx['name']}\n"
             if reg_ctx.get('summary'):
-                regulation_context += f"Summary: {reg_ctx['summary']}\n"
+                summary_text = str(reg_ctx['summary'])[:500]  # Limit regulation summary length
+                regulation_context += f"Summary: {summary_text}...\n" if len(str(reg_ctx['summary'])) > 500 else f"Summary: {summary_text}\n"
             regulation_context += "\n"
         
-        # Create document analyses text (focus on ESG relevant documents)
+        # Sort ESG documents by score (highest first) and limit count
+        sorted_docs = sorted(esg_documents, key=lambda x: x.get('esg_match_score', 0), reverse=True)
+        
+        # Start with top documents and add until we approach context limit
         document_analyses = ""
-        for i, doc in enumerate(esg_documents[:20], 1):  # Limit to top 20 ESG documents
-            document_analyses += f"\n--- DOCUMENT {i} ---\n"
-            document_analyses += f"File: {doc.get('file_name', 'Unknown')}\n"
-            document_analyses += f"Type: {doc.get('file_type', 'Unknown')}\n"
-            document_analyses += f"ESG Score: {doc.get('esg_match_score', 0)}\n"
-            document_analyses += f"Regulation: {doc.get('regulation_folder', 'Unknown')}\n"
-            document_analyses += f"Source URL: {doc.get('source_url', 'Unknown')}\n"
+        current_length = len(regulation_context)
+        
+        for i, doc in enumerate(sorted_docs, 1):
+            doc_section = f"\n--- DOCUMENT {i} ---\n"
+            doc_section += f"File: {doc.get('file_name', 'Unknown')}\n"
+            doc_section += f"Type: {doc.get('file_type', 'Unknown')}\n"
+            doc_section += f"ESG Score: {doc.get('esg_match_score', 0)}\n"
+            doc_section += f"Regulation: {doc.get('regulation_folder', 'Unknown')}\n"
+            doc_section += f"Source URL: {doc.get('source_url', 'Unknown')}\n"
             
-            # Include metadata if available
-            if doc.get('metadata'):
-                document_analyses += f"Metadata: {json.dumps(doc['metadata'], indent=2)}\n"
+            # Include metadata if available (but limit size)
+            metadata = doc.get('metadata')
+            if metadata and isinstance(metadata, dict):
+                # Only include key metadata fields to save space
+                key_metadata = {
+                    'summary': str(metadata.get('summary', ''))[:300] + '...' if len(str(metadata.get('summary', ''))) > 300 else metadata.get('summary', ''),
+                    'key_requirements': metadata.get('key_requirements', [])[:3],  # Only first 3 requirements
+                    'effective_date': metadata.get('effective_date', ''),
+                    'issuing_body': metadata.get('issuing_body', '')
+                }
+                doc_section += f"Key Metadata: {json.dumps(key_metadata, indent=1)}\n"
             
-            # Include relevant excerpts from extracted text (limit length)
+            # Include text sample (adaptive length based on remaining context)
             extracted_text = doc.get('extracted_text', '')
             if extracted_text:
-                # Take first 2000 characters as sample
-                text_sample = extracted_text[:2000]
-                if len(extracted_text) > 2000:
-                    text_sample += "... [truncated]"
-                document_analyses += f"Content Sample: {text_sample}\n"
+                # Calculate how much text we can include
+                remaining_context = max_context_length - current_length - len(doc_section)
+                if remaining_context > 500:  # Only include text if we have reasonable space
+                    max_text_length = min(1500, remaining_context - 200)  # Reserve some space
+                    text_sample = extracted_text[:max_text_length]
+                    if len(extracted_text) > max_text_length:
+                        text_sample += "... [truncated]"
+                    doc_section += f"Content Sample: {text_sample}\n"
             
-            document_analyses += "\n"
+            doc_section += "\n"
+            
+            # Check if adding this document would exceed context limit
+            if current_length + len(doc_section) > max_context_length:
+                if i > 5:  # Ensure we include at least 5 documents
+                    print(f"  📏 Context limit reached. Including top {i-1} documents out of {len(esg_documents)} ESG documents")
+                    break
+                else:
+                    # If we're still in first 5 documents, reduce text sample size more aggressively
+                    extracted_text = doc.get('extracted_text', '')
+                    if extracted_text:
+                        max_text_length = 800  # Very short sample for critical documents
+                        text_sample = extracted_text[:max_text_length] + "... [truncated for context]"
+                        # Rebuild doc_section with shorter text
+                        doc_section = doc_section.split("Content Sample:")[0]
+                        doc_section += f"Content Sample: {text_sample}\n\n"
+            
+            document_analyses += doc_section
+            current_length += len(doc_section)
+            
+            # Safety limit - never include more than 25 documents
+            if i >= 25:
+                print(f"  📊 Document limit reached. Including top 25 documents out of {len(esg_documents)} ESG documents")
+                break
+        
+        total_length = len(regulation_context + document_analyses)
+        print(f"  📏 Prepared context: {total_length:,} characters ({len(esg_documents)} ESG docs available, using top documents)")
         
         return {
             'regulation_context': regulation_context,
@@ -219,8 +285,8 @@ ANALYSIS FOCUS:
             return None
         
         try:
-            # Prepare analysis text
-            analysis_data = self.prepare_analysis_text(country_data)
+            # Prepare analysis text with context length management
+            analysis_data = self.prepare_analysis_text(country_data, getattr(self, 'max_context_length', 15000))
             
             # Generate country code for unique ID
             country_code = country[:3].upper()
@@ -242,7 +308,8 @@ ANALYSIS FOCUS:
                 'regulations_covered': len(country_data['regulation_contexts']),
                 'processing_date': datetime.now().isoformat(),
                 'ai_model_used': self.llm.model_name,
-                'source_country_folder': country
+                'source_country_folder': country,
+                'excel_row_indices': country_data.get('excel_row_indices', [])  # Include row indices
             }
             
             return result
@@ -292,6 +359,336 @@ ANALYSIS FOCUS:
         }
 
 
+def merge_with_original_excel(results: Dict[str, Any], original_excel_path: str, output_dir: Path) -> str:
+    """Merge AI results with original Excel using row indices"""
+    try:
+        print(f"\n📊 Merging AI results with original Excel: {original_excel_path}")
+        
+        # Load original Excel
+        df_original = pd.read_excel(original_excel_path)
+        print(f"  📋 Original Excel: {len(df_original)} rows")
+        
+        # Create AI data mapping by row index
+        ai_mapping = {}
+        for country, country_info in results['country_summaries'].items():
+            country_file = Path(country_info['file'])
+            if country_file.exists():
+                try:
+                    with open(country_file, 'r', encoding='utf-8') as f:
+                        country_data = json.load(f)
+                    
+                    # Get row indices for this country
+                    row_indices = country_data.get('processing_metadata', {}).get('excel_row_indices', [])
+                    
+                    # Map each row index to this country's AI data
+                    for row_idx in row_indices:
+                        if isinstance(row_idx, int):
+                            ai_mapping[row_idx] = country_data
+                            
+                except Exception as e:
+                    print(f"  Warning: Could not load AI data for {country}: {e}")
+        
+        print(f"  🤖 AI data available for {len(ai_mapping)} rows")
+        
+        # Create combined data for Excel
+        combined_data = []
+        
+        for idx, row in df_original.iterrows():
+            # Start with original data
+            combined_row = row.to_dict()
+            
+            # Excel is 0-indexed, but our row numbers start from 1 (Excel row 2 = index 1)
+            excel_row_number = idx + 2  # Convert pandas index to Excel row number
+            
+            # Add AI data if available for this row
+            if excel_row_number in ai_mapping:
+                ai_data = ai_mapping[excel_row_number]
+                
+                # Add AI-generated columns
+                combined_row.update({
+                    'AI_Unique_ID': ai_data.get('unique_id', ''),
+                    'AI_Regulation_Type': ai_data.get('regulation_type', ''),
+                    'AI_Issuing_Body': ai_data.get('issuing_body', ''),
+                    'AI_Publication_Date': ai_data.get('publication_date', ''),
+                    'AI_Regulation_Status': ai_data.get('regulation_status', ''),
+                    'AI_Effective_Dates': ai_data.get('effective_dates', ''),
+                    'AI_ESG_Focus_Areas': ', '.join(ai_data.get('esg_focus_areas', [])) if isinstance(ai_data.get('esg_focus_areas'), list) else str(ai_data.get('esg_focus_areas', '')),
+                    'AI_Reporting_Frequency': ai_data.get('reporting_frequency', ''),
+                    'AI_Document_Sources': ai_data.get('document_sources', 0),
+                    'AI_Confidence_Score': ai_data.get('confidence_score', 0),
+                    'AI_Filing_Mechanisms': ai_data.get('filing_mechanisms', ''),
+                    'AI_Assurance_Requirements': ai_data.get('assurance_requirements', ''),
+                    'AI_Financial_Integration': ai_data.get('financial_integration', ''),
+                    'AI_Executive_Summary': str(ai_data.get('executive_summary', ''))[:300] + '...' if len(str(ai_data.get('executive_summary', ''))) > 300 else str(ai_data.get('executive_summary', '')),
+                    'AI_Top_3_Key_Requirements': ', '.join(ai_data.get('key_requirements', [])[:3]) if isinstance(ai_data.get('key_requirements'), list) else '',
+                    'AI_Scope_and_Applicability': str(ai_data.get('scope_and_applicability', ''))[:200] + '...' if len(str(ai_data.get('scope_and_applicability', ''))) > 200 else str(ai_data.get('scope_and_applicability', '')),
+                    'AI_Processing_Status': 'AI Processed',
+                    'AI_Processing_Date': ai_data.get('processing_metadata', {}).get('processing_date', ''),
+                    'AI_Model_Used': ai_data.get('processing_metadata', {}).get('ai_model_used', ''),
+                    'AI_Total_Pages_Analyzed': ai_data.get('total_pages_analyzed', 0),
+                    'AI_Key_Gaps_Identified': ', '.join(ai_data.get('key_gaps_identified', [])) if isinstance(ai_data.get('key_gaps_identified'), list) else str(ai_data.get('key_gaps_identified', ''))
+                })
+            else:
+                # No AI data available - mark as not processed
+                combined_row.update({
+                    'AI_Unique_ID': '',
+                    'AI_Regulation_Type': '',
+                    'AI_Issuing_Body': '',
+                    'AI_Publication_Date': '',
+                    'AI_Regulation_Status': '',
+                    'AI_Effective_Dates': '',
+                    'AI_ESG_Focus_Areas': '',
+                    'AI_Reporting_Frequency': '',
+                    'AI_Document_Sources': 0,
+                    'AI_Confidence_Score': 0,
+                    'AI_Filing_Mechanisms': '',
+                    'AI_Assurance_Requirements': '',
+                    'AI_Financial_Integration': '',
+                    'AI_Executive_Summary': '',
+                    'AI_Top_3_Key_Requirements': '',
+                    'AI_Scope_and_Applicability': '',
+                    'AI_Processing_Status': 'No ESG validated file found',
+                    'AI_Processing_Date': '',
+                    'AI_Model_Used': '',
+                    'AI_Total_Pages_Analyzed': 0,
+                    'AI_Key_Gaps_Identified': ''
+                })
+            
+            combined_data.append(combined_row)
+        
+        # Create DataFrame
+        df_combined = pd.DataFrame(combined_data)
+        
+        # Create Excel with original + AI columns
+        excel_filename = output_dir / "combined_original_and_ai_analysis.xlsx"
+        
+        with pd.ExcelWriter(excel_filename, engine='openpyxl') as writer:
+            # Main combined sheet
+            df_combined.to_excel(writer, sheet_name='Combined_Analysis', index=False)
+            
+            # Statistics sheet
+            processed_count = len([r for r in combined_data if r.get('AI_Processing_Status') == 'AI Processed'])
+            no_esg_count = len([r for r in combined_data if r.get('AI_Processing_Status') == 'No ESG validated file found'])
+            avg_confidence = sum(r.get('AI_Confidence_Score', 0) for r in combined_data if r.get('AI_Confidence_Score', 0) > 0) / max(processed_count, 1)
+            
+            stats_data = {
+                'Metric': [
+                    'Total Regulations in Original Excel',
+                    'Regulations with AI Analysis',
+                    'Regulations with No ESG Validated Files',
+                    'AI Processing Coverage Rate',
+                    'Average AI Confidence Score',
+                    'High Confidence Regulations (>0.7)',
+                    'Medium Confidence Regulations (0.4-0.7)',
+                    'Low Confidence Regulations (<0.4)',
+                    'Processing Date'
+                ],
+                'Value': [
+                    len(df_combined),
+                    processed_count,
+                    no_esg_count,
+                    f"{(processed_count/len(df_combined)*100):.1f}%",
+                    f"{avg_confidence:.3f}",
+                    len([r for r in combined_data if r.get('AI_Confidence_Score', 0) > 0.7]),
+                    len([r for r in combined_data if 0.4 <= r.get('AI_Confidence_Score', 0) <= 0.7]),
+                    len([r for r in combined_data if 0 < r.get('AI_Confidence_Score', 0) < 0.4]),
+                    datetime.now().isoformat()
+                ]
+            }
+            
+            stats_df = pd.DataFrame(stats_data)
+            stats_df.to_excel(writer, sheet_name='Coverage_Statistics', index=False)
+            
+            # Auto-adjust column widths for both sheets
+            for sheet_name in writer.sheets:
+                worksheet = writer.sheets[sheet_name]
+                for column in worksheet.columns:
+                    max_length = 0
+                    column_letter = column[0].column_letter
+                    for cell in column:
+                        try:
+                            if len(str(cell.value)) > max_length:
+                                max_length = len(str(cell.value))
+                        except:
+                            pass
+                    adjusted_width = min(max_length + 2, 50)
+                    worksheet.column_dimensions[column_letter].width = adjusted_width
+        
+        print(f"  ✅ Combined Excel created: {excel_filename}")
+        print(f"  📊 {len(df_combined)} total regulations, {processed_count} with AI analysis ({(processed_count/len(df_combined)*100):.1f}% coverage)")
+        
+        return str(excel_filename)
+        
+    except Exception as e:
+        print(f"  ❌ Error creating combined Excel: {e}")
+        return None
+
+
+def create_countries_excel_summary(results: Dict[str, Any], output_dir: Path) -> str:
+    """Create Excel file with all countries as rows and key information as columns"""
+    try:
+        print("\n📊 Creating Excel summary of all countries...")
+        
+        # Prepare data for Excel
+        excel_data = []
+        
+        for country, country_info in results['country_summaries'].items():
+            # Load the detailed country data to extract more information
+            country_file = Path(country_info['file'])
+            if country_file.exists():
+                try:
+                    with open(country_file, 'r', encoding='utf-8') as f:
+                        country_data = json.load(f)
+                    
+                    # Extract key information for Excel row
+                    row = {
+                        'Country': country,
+                        'Unique_ID': country_data.get('unique_id', ''),
+                        'Regulation_Name': country_data.get('regulation_name', ''),
+                        'Issuing_Body': country_data.get('issuing_body', ''),
+                        'Regulation_Type': country_data.get('regulation_type', ''),
+                        'Publication_Date': country_data.get('publication_date', ''),
+                        'Regulation_Status': country_data.get('regulation_status', ''),
+                        'Effective_Dates': country_data.get('effective_dates', ''),
+                        'ESG_Focus_Areas': ', '.join(country_data.get('esg_focus_areas', [])) if isinstance(country_data.get('esg_focus_areas'), list) else str(country_data.get('esg_focus_areas', '')),
+                        'Reporting_Frequency': country_data.get('reporting_frequency', ''),
+                        'Document_Sources': country_data.get('document_sources', 0),
+                        'Total_Pages_Analyzed': country_data.get('total_pages_analyzed', 0),
+                        'Confidence_Score': country_data.get('confidence_score', 0),
+                        'Filing_Mechanisms': country_data.get('filing_mechanisms', ''),
+                        'Assurance_Requirements': country_data.get('assurance_requirements', ''),
+                        'Financial_Integration': country_data.get('financial_integration', ''),
+                        'Primary_Source_URLs': ', '.join(country_data.get('primary_source_urls', [])[:3]) if isinstance(country_data.get('primary_source_urls'), list) else str(country_data.get('primary_source_urls', ''))[:200],
+                        'Last_Updated': country_data.get('last_updated', ''),
+                        'Key_Requirements_Count': len(country_data.get('key_requirements', [])) if isinstance(country_data.get('key_requirements'), list) else 0,
+                        'Key_Gaps_Identified': ', '.join(country_data.get('key_gaps_identified', [])) if isinstance(country_data.get('key_gaps_identified'), list) else str(country_data.get('key_gaps_identified', '')),
+                        
+                        # Executive summary (truncated for Excel)
+                        'Executive_Summary': str(country_data.get('executive_summary', ''))[:500] + '...' if len(str(country_data.get('executive_summary', ''))) > 500 else str(country_data.get('executive_summary', '')),
+                        
+                        # Key requirements (first 3 as comma-separated)
+                        'Top_3_Key_Requirements': ', '.join(country_data.get('key_requirements', [])[:3]) if isinstance(country_data.get('key_requirements'), list) else str(country_data.get('key_requirements', ''))[:300],
+                        
+                        # Scope and applicability (truncated)
+                        'Scope_and_Applicability': str(country_data.get('scope_and_applicability', ''))[:300] + '...' if len(str(country_data.get('scope_and_applicability', ''))) > 300 else str(country_data.get('scope_and_applicability', '')),
+                        
+                        # Processing metadata
+                        'Processing_Date': country_data.get('processing_metadata', {}).get('processing_date', ''),
+                        'Source_Documents_Total': country_data.get('processing_metadata', {}).get('source_documents_total', 0),
+                        'ESG_Documents_Analyzed': country_data.get('processing_metadata', {}).get('esg_documents_analyzed', 0),
+                        'AI_Model_Used': country_data.get('processing_metadata', {}).get('ai_model_used', ''),
+                    }
+                    
+                    excel_data.append(row)
+                    
+                except Exception as e:
+                    print(f"  Warning: Could not load detailed data for {country}: {e}")
+                    # Create basic row with available info
+                    row = {
+                        'Country': country,
+                        'Unique_ID': country_info.get('unique_id', ''),
+                        'Regulation_Name': country_info.get('regulation_name', ''),
+                        'Confidence_Score': country_info.get('confidence_score', 0),
+                        'Document_Sources': country_info.get('document_sources', 0),
+                        'Processing_Status': 'Data Load Error'
+                    }
+                    excel_data.append(row)
+            else:
+                print(f"  Warning: Country file not found for {country}")
+        
+        if not excel_data:
+            print("  No data available for Excel export")
+            return None
+        
+        # Create DataFrame and Excel file
+        df = pd.DataFrame(excel_data)
+        
+        # Sort by confidence score (descending) and then by country name
+        df = df.sort_values(['Confidence_Score', 'Country'], ascending=[False, True])
+        
+        # Create Excel file with formatting
+        excel_filename = output_dir / "countries_regulatory_summary.xlsx"
+        
+        with pd.ExcelWriter(excel_filename, engine='openpyxl') as writer:
+            # Main summary sheet
+            df.to_excel(writer, sheet_name='Countries_Summary', index=False)
+            
+            # Get the workbook and worksheet
+            workbook = writer.book
+            worksheet = writer.sheets['Countries_Summary']
+            
+            # Auto-adjust column widths
+            for column in worksheet.columns:
+                max_length = 0
+                column_letter = column[0].column_letter
+                for cell in column:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = min(max_length + 2, 50)  # Cap at 50 characters
+                worksheet.column_dimensions[column_letter].width = adjusted_width
+            
+            # Create a statistics sheet
+            stats_data = {
+                'Metric': [
+                    'Total Countries Processed',
+                    'Successful AI Consolidations', 
+                    'Failed Consolidations',
+                    'Average Confidence Score',
+                    'Countries with High Confidence (>0.7)',
+                    'Countries with Medium Confidence (0.4-0.7)',
+                    'Countries with Low Confidence (<0.4)',
+                    'Total Document Sources',
+                    'Average Documents per Country',
+                    'Processing Date'
+                ],
+                'Value': [
+                    len(excel_data),
+                    results['consolidation_metadata']['successful_consolidations'],
+                    results['consolidation_metadata']['failed_consolidations'],
+                    f"{df['Confidence_Score'].mean():.3f}" if 'Confidence_Score' in df.columns else 'N/A',
+                    len(df[df['Confidence_Score'] > 0.7]) if 'Confidence_Score' in df.columns else 'N/A',
+                    len(df[(df['Confidence_Score'] >= 0.4) & (df['Confidence_Score'] <= 0.7)]) if 'Confidence_Score' in df.columns else 'N/A',
+                    len(df[df['Confidence_Score'] < 0.4]) if 'Confidence_Score' in df.columns else 'N/A',
+                    df['Document_Sources'].sum() if 'Document_Sources' in df.columns else 'N/A',
+                    f"{df['Document_Sources'].mean():.1f}" if 'Document_Sources' in df.columns else 'N/A',
+                    results['consolidation_metadata']['processing_date']
+                ]
+            }
+            
+            stats_df = pd.DataFrame(stats_data)
+            stats_df.to_excel(writer, sheet_name='Statistics', index=False)
+            
+            # Auto-adjust stats sheet columns
+            stats_worksheet = writer.sheets['Statistics']
+            for column in stats_worksheet.columns:
+                max_length = 0
+                column_letter = column[0].column_letter
+                for cell in column:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = max_length + 2
+                stats_worksheet.column_dimensions[column_letter].width = adjusted_width
+        
+        print(f"  ✅ Excel file created: {excel_filename}")
+        print(f"  📊 Included {len(excel_data)} countries with detailed regulatory information")
+        print(f"  📋 Sheets: Countries_Summary, Statistics")
+        
+        return str(excel_filename)
+        
+    except ImportError:
+        print("  ❌ pandas and openpyxl required for Excel export. Install with: pip install pandas openpyxl")
+        return None
+    except Exception as e:
+        print(f"  ❌ Error creating Excel file: {e}")
+        return None
+
+
 def main():
     """Main function for AI-powered metadata consolidation"""
     parser = argparse.ArgumentParser(
@@ -307,6 +704,11 @@ Examples:
   python ai_consolidate_metadata.py
   python ai_consolidate_metadata.py --input file_metadata_analysis_results --output ai_consolidated_summaries
   python ai_consolidate_metadata.py --model gpt-4 --temperature 0.2
+
+Output:
+  - Individual country JSON files with AI-consolidated regulatory summaries
+  - Excel file with all countries as rows and key regulatory data as columns
+  - Global consolidation summary with statistics
         """
     )
     
@@ -318,6 +720,10 @@ Examples:
                        help="OpenAI model to use (default: gpt-4o-mini)")
     parser.add_argument("--temperature", type=float, default=0.1,
                        help="AI temperature setting (default: 0.1)")
+    parser.add_argument("--max-context", type=int, default=15000,
+                       help="Maximum context length for AI processing (default: 15000)")
+    parser.add_argument("--original-excel", type=str,
+                       help="Path to original Excel file for merging with AI results")
     
     args = parser.parse_args()
     
@@ -347,6 +753,8 @@ Examples:
     try:
         # Initialize AI consolidator
         consolidator = AIMetadataConsolidator(args.model, args.temperature)
+        consolidator.max_context_length = args.max_context
+        consolidator.original_excel_path = args.original_excel  # Store for merging
         
         # Find all country folders
         country_folders = [d for d in input_dir.iterdir() if d.is_dir()]
@@ -415,6 +823,14 @@ Examples:
         with open(summary_file, 'w', encoding='utf-8') as f:
             json.dump(results, f, indent=2, ensure_ascii=False)
         
+        # Create Excel summary of all countries
+        excel_file = create_countries_excel_summary(results, output_dir)
+        
+        # Create combined Excel with original + AI data if original Excel provided
+        combined_excel_file = None
+        if hasattr(consolidator, 'original_excel_path') and consolidator.original_excel_path:
+            combined_excel_file = merge_with_original_excel(results, consolidator.original_excel_path, output_dir)
+        
         # Print final summary
         metadata = results['consolidation_metadata']
         print(f"\n🎉 AI CONSOLIDATION COMPLETED")
@@ -424,6 +840,10 @@ Examples:
         print(f"❌ Failed consolidations: {metadata['failed_consolidations']}")
         print(f"📁 Output directory: {output_dir}")
         print(f"📋 Summary file: {summary_file}")
+        if excel_file:
+            print(f"📊 Excel summary: {excel_file}")
+        if combined_excel_file:
+            print(f"🔗 Combined Excel (Original + AI): {combined_excel_file}")
         
         return True
         

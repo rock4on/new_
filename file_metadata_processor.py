@@ -369,6 +369,14 @@ class FileMetadataProcessor:
         
         return record
     
+    def extract_row_index_from_folder(self, folder_name: str) -> int:
+        """Extract Excel row index from folder name like 'Row5_Regulation_Name'"""
+        try:
+            match = re.match(r'Row(\d+)_', folder_name)
+            return int(match.group(1)) if match else None
+        except:
+            return None
+    
     def load_regulation_info(self, regulation_folder: Path) -> Dict[str, Any]:
         """Load regulation info from regulation_info.json"""
         info_file = regulation_folder / "regulation_info.json"
@@ -541,6 +549,11 @@ class FileMetadataProcessor:
         
         regulation_name = reg_info.get('regulation_name', regulation_folder.name)
         
+        # Extract Excel row index from folder name or regulation info
+        excel_row_index = self.extract_row_index_from_folder(regulation_folder.name)
+        if excel_row_index is None:
+            excel_row_index = reg_info.get('excel_row_number', 'Unknown')
+        
         # Find all document files (same as regulation_filter.py)
         pdf_files = list(regulation_folder.glob("*.pdf"))
         html_files = list(regulation_folder.glob("*.html"))
@@ -574,6 +587,7 @@ class FileMetadataProcessor:
             'country': country,
             'regulation_name': regulation_name,
             'regulation_folder': regulation_folder.name,
+            'excel_row_index': excel_row_index,  # Add Excel row index for merging
             'total_documents': len(all_files),
             'processed_documents': len(document_analyses),
             'esg_relevant_documents': len([d for d in document_analyses if d.get('esg_relevant', False)]),
@@ -762,6 +776,7 @@ class FileMetadataProcessor:
             reg_summary = {
                 'regulation_name': regulation_name,
                 'country': country,
+                'excel_row_index': regulation_result.get('excel_row_index', 'Unknown'),  # Include row index
                 'total_documents': regulation_result['total_documents'],
                 'processed_documents': regulation_result['processed_documents'],
                 'esg_relevant_documents': regulation_result['esg_relevant_documents'],
@@ -783,6 +798,7 @@ class FileMetadataProcessor:
                     esg_doc = analysis.copy()
                     esg_doc['regulation_name'] = regulation_name
                     esg_doc['country'] = country
+                    esg_doc['excel_row_index'] = regulation_result.get('excel_row_index', 'Unknown')  # Preserve row index
                     esg_relevant_documents.append(esg_doc)
         
         # Save ESG-relevant documents in separate country folder
