@@ -416,11 +416,18 @@ def merge_with_original_excel(results: Dict[str, Any], original_excel_path: str,
         
         # Fill in AI data for rows that have it
         for row_number, ai_data in ai_data_by_row.items():
-            # Convert Excel row number to pandas index (row 2 becomes index 0, row 3 becomes index 1, etc.)
-            pandas_index = row_number - 2
+            # Row numbers correspond directly to pandas indices (row 1 = index 1, etc.)
+            pandas_index = row_number
             
-            if 0 <= pandas_index < len(df_combined):
-                print(f"  📝 Adding AI data to Excel row {row_number} (pandas index {pandas_index})")
+            if pandas_index < 1:
+                print(f"    ⚠️  Skipping row {row_number} - header row")
+                continue
+                
+            if pandas_index >= len(df_combined):
+                print(f"    ⚠️  Row {row_number} is outside DataFrame range (max index {len(df_combined)-1})")
+                continue
+                
+            print(f"  📝 Adding AI data to Excel row {row_number} (pandas index {pandas_index})")
                 
                 # Set AI column values for this row
                 df_combined.loc[pandas_index, 'AI_Unique_ID'] = ai_data.get('unique_id', '')
@@ -476,7 +483,17 @@ def merge_with_original_excel(results: Dict[str, Any], original_excel_path: str,
             # Statistics sheet
             processed_count = len([r for r in combined_data if r.get('AI_Processing_Status') == 'AI Processed'])
             no_esg_count = len([r for r in combined_data if r.get('AI_Processing_Status') == 'No ESG validated file found'])
-            avg_confidence = sum(r.get('AI_Confidence_Score', 0) for r in combined_data if r.get('AI_Confidence_Score', 0) > 0) / max(processed_count, 1)
+            # Convert confidence scores to float for calculations
+            confidence_scores = []
+            for r in combined_data:
+                score = r.get('AI_Confidence_Score', 0)
+                try:
+                    score_float = float(score) if score != '' else 0
+                    if score_float > 0:
+                        confidence_scores.append(score_float)
+                except (ValueError, TypeError):
+                    pass
+            avg_confidence = sum(confidence_scores) / max(len(confidence_scores), 1)
             
             stats_data = {
                 'Metric': [
@@ -496,9 +513,9 @@ def merge_with_original_excel(results: Dict[str, Any], original_excel_path: str,
                     no_esg_count,
                     f"{(processed_count/len(df_combined)*100):.1f}%",
                     f"{avg_confidence:.3f}",
-                    len([r for r in combined_data if r.get('AI_Confidence_Score', 0) > 0.7]),
-                    len([r for r in combined_data if 0.4 <= r.get('AI_Confidence_Score', 0) <= 0.7]),
-                    len([r for r in combined_data if 0 < r.get('AI_Confidence_Score', 0) < 0.4]),
+                    len([r for r in combined_data if safe_float(r.get('AI_Confidence_Score', 0)) > 0.7]),
+                    len([r for r in combined_data if 0.4 <= safe_float(r.get('AI_Confidence_Score', 0)) <= 0.7]),
+                    len([r for r in combined_data if 0 < safe_float(r.get('AI_Confidence_Score', 0)) < 0.4]),
                     datetime.now().isoformat()
                 ]
             }
@@ -529,6 +546,14 @@ def merge_with_original_excel(results: Dict[str, Any], original_excel_path: str,
     except Exception as e:
         print(f"  ❌ Error creating combined Excel: {e}")
         return None
+
+
+def safe_float(value):
+    """Safely convert value to float, return 0 if conversion fails"""
+    try:
+        return float(value) if value != '' else 0.0
+    except (ValueError, TypeError):
+        return 0.0
 
 
 def extract_row_index_from_country_name(country_folder_name: str) -> int:
