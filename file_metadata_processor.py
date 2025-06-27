@@ -585,6 +585,7 @@ class FileMetadataProcessor:
         # Create comprehensive result (matches regulation_filter.py structure)
         result = {
             'country': country,
+            'country_folder_name': country_folder.name,  # Preserve original folder name with row number
             'regulation_name': regulation_name,
             'regulation_folder': regulation_folder.name,
             'excel_row_index': excel_row_index,  # Add Excel row index for merging
@@ -716,12 +717,12 @@ class FileMetadataProcessor:
         if not country_results:
             return
         
-        # Create country folder in output directory
-        country_output_dir = self.output_dir / self.safe_folder_name(country)
+        # Create country folder in output directory - preserve row number from input folder
+        country_output_dir = self.output_dir / self.safe_folder_name(country_results[0].get('country_folder_name', country))
         country_output_dir.mkdir(exist_ok=True)
         
-        # Create ESG-relevant folder for this country
-        esg_output_dir = self.output_dir / "esg_relevant_by_country" / self.safe_folder_name(country)
+        # Create ESG-relevant folder for this country - also preserve row number
+        esg_output_dir = self.output_dir / "esg_relevant_by_country" / self.safe_folder_name(country_results[0].get('country_folder_name', country))
         esg_output_dir.mkdir(parents=True, exist_ok=True)
         
         # Calculate totals
@@ -759,6 +760,8 @@ class FileMetadataProcessor:
             'analyzed_documents': analyzed_documents
         }
         
+        # Use the country folder name (with row number) for the summary file
+        country_folder_name = country_results[0].get('country_folder_name', country)
         summary_file = country_output_dir / f"{self.safe_folder_name(country)}_summary.json"
         with open(summary_file, 'w', encoding='utf-8') as f:
             json.dump(country_summary, f, indent=2, ensure_ascii=False)
