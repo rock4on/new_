@@ -369,10 +369,10 @@ class FileMetadataProcessor:
         
         return record
     
-    def extract_row_index_from_folder(self, folder_name: str) -> int:
-        """Extract Excel row index from folder name like 'Row5_Regulation_Name'"""
+    def extract_row_index_from_country(self, country_folder_name: str) -> int:
+        """Extract Excel row index from country folder name like 'Row5_Country_Name'"""
         try:
-            match = re.match(r'Row(\d+)_', folder_name)
+            match = re.match(r'Row(\d+)_', country_folder_name)
             return int(match.group(1)) if match else None
         except:
             return None
@@ -549,8 +549,8 @@ class FileMetadataProcessor:
         
         regulation_name = reg_info.get('regulation_name', regulation_folder.name)
         
-        # Extract Excel row index from folder name or regulation info
-        excel_row_index = self.extract_row_index_from_folder(regulation_folder.name)
+        # Extract Excel row index from country folder name or regulation info
+        excel_row_index = self.extract_row_index_from_country(country_folder.name)
         if excel_row_index is None:
             excel_row_index = reg_info.get('excel_row_number', 'Unknown')
         
@@ -643,9 +643,11 @@ class FileMetadataProcessor:
         
         # Process each country
         for country_folder in country_folders:
-            country = country_folder.name
+            country_folder_name = country_folder.name
+            # Extract clean country name (remove row prefix if present)
+            country = re.sub(r'^Row\d+_', '', country_folder_name)
             print(f"\n{'='*60}")
-            print(f"🌍 Processing country: {country}")
+            print(f"🌍 Processing country: {country} (folder: {country_folder_name})")
             
             # Find all regulation folders in this country
             regulation_folders = [d for d in country_folder.iterdir() if d.is_dir()]

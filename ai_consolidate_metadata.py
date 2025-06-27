@@ -114,20 +114,25 @@ ANALYSIS FOCUS:
         
         self.chain = self.consolidation_prompt | self.llm | self.parser
     
-    def extract_row_index_from_folder(self, folder_name: str) -> int:
-        """Extract Excel row index from folder name like 'Row5_Regulation_Name'"""
+    def extract_row_index_from_country(self, country_folder_name: str) -> int:
+        """Extract Excel row index from country folder name like 'Row5_Country_Name'"""
         try:
-            match = re.match(r'Row(\d+)_', folder_name)
+            match = re.match(r'Row(\d+)_', country_folder_name)
             return int(match.group(1)) if match else None
         except:
             return None
     
     def load_country_data(self, country_folder: Path) -> Dict[str, Any]:
         """Load all metadata analysis data for a country"""
-        country_name = country_folder.name
-        print(f"📂 Loading data for: {country_name}")
+        country_folder_name = country_folder.name
+        # Extract clean country name (remove row prefix if present)
+        country_name = re.sub(r'^Row\d+_', '', country_folder_name)
+        print(f"📂 Loading data for: {country_name} (folder: {country_folder_name})")
         
-        # Load country summary
+        # Extract Excel row index from country folder name
+        excel_row_index = self.extract_row_index_from_country(country_folder_name)
+        
+        # Load country summary  
         country_summary_file = country_folder / f"{country_name}_summary.json"
         country_summary = {}
         if country_summary_file.exists():
@@ -137,32 +142,22 @@ ANALYSIS FOCUS:
         # Collect all document analyses from all regulations
         all_documents = []
         regulation_contexts = []
-        excel_row_indices = []  # Track Excel row indices
         
         regulation_folders = [d for d in country_folder.iterdir() if d.is_dir()]
         
         for reg_folder in regulation_folders:
             regulation_name = reg_folder.name
             
-            # Extract Excel row index from folder name
-            excel_row_index = self.extract_row_index_from_folder(regulation_name)
-            
             # Load regulation summary
             reg_summary_file = reg_folder / "regulation_summary.json"
             if reg_summary_file.exists():
                 with open(reg_summary_file, 'r', encoding='utf-8') as f:
                     reg_summary = json.load(f)
-                    # Use row index from summary if not found in folder name
-                    if excel_row_index is None:
-                        excel_row_index = reg_summary.get('excel_row_index', 'Unknown')
                     regulation_contexts.append({
                         'name': regulation_name,
                         'summary': reg_summary,
-                        'excel_row_index': excel_row_index
+                        'excel_row_index': excel_row_index  # Use country-level row index
                     })
-            
-            if excel_row_index is not None:
-                excel_row_indices.append(excel_row_index)
             
             # Load all document analyses
             analysis_files = list(reg_folder.glob("*_analysis.json"))
@@ -171,18 +166,19 @@ ANALYSIS FOCUS:
                     with open(analysis_file, 'r', encoding='utf-8') as f:
                         doc_analysis = json.load(f)
                         doc_analysis['regulation_folder'] = regulation_name
-                        doc_analysis['excel_row_index'] = excel_row_index  # Add row index to documents
+                        doc_analysis['excel_row_index'] = excel_row_index  # Use country-level row index
                         all_documents.append(doc_analysis)
                 except Exception as e:
                     print(f"  Warning: Could not load {analysis_file}: {e}")
         
         return {
             'country': country_name,
+            'country_folder_name': country_folder_name,
+            'excel_row_index': excel_row_index,  # Single row index for the country
             'country_summary': country_summary,
             'regulation_contexts': regulation_contexts,
             'all_documents': all_documents,
-            'esg_documents': [d for d in all_documents if d.get('esg_relevant', False)],
-            'excel_row_indices': excel_row_indices  # Include row indices for merging
+            'esg_documents': [d for d in all_documents if d.get('esg_relevant', False)]
         }
     
     def prepare_analysis_text(self, country_data: Dict[str, Any], max_context_length: int = 15000) -> Dict[str, str]:
@@ -309,7 +305,8 @@ ANALYSIS FOCUS:
                 'processing_date': datetime.now().isoformat(),
                 'ai_model_used': self.llm.model_name,
                 'source_country_folder': country,
-                'excel_row_indices': country_data.get('excel_row_indices', [])  # Include row indices
+                'excel_row_index': country_data.get('excel_row_index'),  # Single row index for country
+                'country_folder_name': country_data.get('country_folder_name')
             }
             
             return result
@@ -377,13 +374,12 @@ def merge_with_original_excel(results: Dict[str, Any], original_excel_path: str,
                     with open(country_file, 'r', encoding='utf-8') as f:
                         country_data = json.load(f)
                     
-                    # Get row indices for this country
-                    row_indices = country_data.get('processing_metadata', {}).get('excel_row_indices', [])
+                    # Get row index for this country
+                    row_index = country_data.get('processing_metadata', {}).get('excel_row_index')
                     
-                    # Map each row index to this country's AI data
-                    for row_idx in row_indices:
-                        if isinstance(row_idx, int):
-                            ai_mapping[row_idx] = country_data
+                    # Map this row index to this country's AI data
+                    if isinstance(row_index, int):
+                        ai_mapping[row_index] = country_data
                             
                 except Exception as e:
                     print(f"  Warning: Could not load AI data for {country}: {e}")

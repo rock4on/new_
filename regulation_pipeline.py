@@ -110,11 +110,10 @@ class RegulationPipeline:
         print(f"\n🔄 Scraping regulation: [{country}] {reg_name}")
         print(f"🎯 URLs to scrape: {len(urls)}")
         
-        # Create country-based folder structure with row index
-        safe_country = self.safe_folder_name(country)
-        # Include Excel row number in folder name for easy merging later
+        # Create country-based folder structure with row index in country name
         row_number = regulation.get('row_number', 'Unknown')
-        safe_reg_name = f"Row{row_number}_{self.safe_folder_name(reg_name)}"
+        safe_country = f"Row{row_number}_{self.safe_folder_name(country)}"
+        safe_reg_name = self.safe_folder_name(reg_name)
         
         country_dir = self.output_dir / safe_country
         country_dir.mkdir(exist_ok=True)
