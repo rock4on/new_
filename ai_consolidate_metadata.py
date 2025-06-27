@@ -359,48 +359,40 @@ ANALYSIS FOCUS:
 
 
 def merge_with_original_excel(results: Dict[str, Any], original_excel_path: str, output_dir: Path) -> str:
-    """Merge AI results with original Excel using row indices"""
+    """Merge AI results with original Excel using row indices - simplified logic"""
     try:
         print(f"\n📊 Merging AI results with original Excel: {original_excel_path}")
         
-        # Load original Excel
+        # 1. Load original Excel file
         df_original = pd.read_excel(original_excel_path)
-        print(f"  📋 Original Excel: {len(df_original)} rows")
+        print(f"  📋 Original Excel has {len(df_original)} rows")
         
-        # Create AI data mapping by row index - direct mapping from folder names
+        # 2. Create AI data mapping by extracting row numbers from AI result files
         ai_data_by_row = {}
-        print(f"  🔍 Processing {len(results['country_summaries'])} countries for row mapping")
-        
         for country, country_info in results['country_summaries'].items():
             country_file = Path(country_info['file'])
-            print(f"  📂 Processing {country} from file: {country_file.name}")
-            
             if country_file.exists():
                 try:
                     with open(country_file, 'r', encoding='utf-8') as f:
                         ai_data = json.load(f)
                     
-                    # Extract row number from the country folder name in metadata
+                    # Get row number from folder name in metadata
                     country_folder_name = ai_data.get('processing_metadata', {}).get('country_folder_name', '')
                     row_number = extract_row_index_from_country_name(country_folder_name)
                     
-                    if row_number:
+                    if row_number and row_number < len(df_original):
                         ai_data_by_row[row_number] = ai_data
-                        print(f"    ✅ Mapped row {row_number} to {country} AI data")
-                    else:
-                        print(f"    ❌ Could not extract row number from folder: {country_folder_name}")
-                        
+                        print(f"    ✅ Row {row_number}: {country}")
+                    
                 except Exception as e:
                     print(f"    ❌ Error loading {country}: {e}")
-            else:
-                print(f"    ❌ File not found: {country_file}")
         
-        print(f"  📊 AI data mapped for rows: {sorted(ai_data_by_row.keys())}")
+        print(f"  📊 AI data mapped for {len(ai_data_by_row)} rows")
         
-        # Start with the original Excel data
+        # 3. Create combined DataFrame with original data + all AI columns
         df_combined = df_original.copy()
         
-        # Add AI columns to the DataFrame
+        # Add all AI columns with original schema
         ai_columns = [
             'AI_Unique_ID', 'AI_Regulation_Type', 'AI_Issuing_Body', 'AI_Publication_Date',
             'AI_Regulation_Status', 'AI_Effective_Dates', 'AI_ESG_Focus_Areas', 'AI_Reporting_Frequency',
@@ -414,134 +406,56 @@ def merge_with_original_excel(results: Dict[str, Any], original_excel_path: str,
         for col in ai_columns:
             df_combined[col] = 'No ESG validated file found' if col == 'AI_Processing_Status' else ''
         
-        # Fill in AI data for rows that have it
+        # 4. Fill in AI data for rows that have it
         for row_number, ai_data in ai_data_by_row.items():
-            # Row numbers correspond directly to pandas indices (row 1 = index 1, etc.)
-            pandas_index = row_number
-            
-            if pandas_index < 1:
-                print(f"    ⚠️  Skipping row {row_number} - header row")
-                continue
+            if 0 <= row_number < len(df_combined):
+                print(f"  📝 Adding AI data to row {row_number}")
                 
-            if pandas_index >= len(df_combined):
-                print(f"    ⚠️  Row {row_number} is outside DataFrame range (max index {len(df_combined)-1})")
-                continue
-                
-            print(f"  📝 Adding AI data to Excel row {row_number} (pandas index {pandas_index})")
-                
-                # Set AI column values for this row
-                df_combined.loc[pandas_index, 'AI_Unique_ID'] = ai_data.get('unique_id', '')
-                df_combined.loc[pandas_index, 'AI_Regulation_Type'] = ai_data.get('regulation_type', '')
-                df_combined.loc[pandas_index, 'AI_Issuing_Body'] = ai_data.get('issuing_body', '')
-                df_combined.loc[pandas_index, 'AI_Publication_Date'] = ai_data.get('publication_date', '')
-                df_combined.loc[pandas_index, 'AI_Regulation_Status'] = ai_data.get('regulation_status', '')
-                df_combined.loc[pandas_index, 'AI_Effective_Dates'] = ai_data.get('effective_dates', '')
+                # Set all AI column values for this row
+                df_combined.loc[row_number, 'AI_Processing_Status'] = 'AI Processed'
+                df_combined.loc[row_number, 'AI_Unique_ID'] = ai_data.get('unique_id', '')
+                df_combined.loc[row_number, 'AI_Regulation_Type'] = ai_data.get('regulation_type', '')
+                df_combined.loc[row_number, 'AI_Issuing_Body'] = ai_data.get('issuing_body', '')
+                df_combined.loc[row_number, 'AI_Publication_Date'] = ai_data.get('publication_date', '')
+                df_combined.loc[row_number, 'AI_Regulation_Status'] = ai_data.get('regulation_status', '')
+                df_combined.loc[row_number, 'AI_Effective_Dates'] = ai_data.get('effective_dates', '')
                 
                 esg_areas = ai_data.get('esg_focus_areas', [])
-                df_combined.loc[pandas_index, 'AI_ESG_Focus_Areas'] = ', '.join(esg_areas) if isinstance(esg_areas, list) else str(esg_areas)
+                df_combined.loc[row_number, 'AI_ESG_Focus_Areas'] = ', '.join(esg_areas) if isinstance(esg_areas, list) else str(esg_areas)
                 
-                df_combined.loc[pandas_index, 'AI_Reporting_Frequency'] = ai_data.get('reporting_frequency', '')
-                df_combined.loc[pandas_index, 'AI_Document_Sources'] = ai_data.get('document_sources', 0)
-                df_combined.loc[pandas_index, 'AI_Confidence_Score'] = ai_data.get('confidence_score', 0)
-                df_combined.loc[pandas_index, 'AI_Filing_Mechanisms'] = ai_data.get('filing_mechanisms', '')
-                df_combined.loc[pandas_index, 'AI_Assurance_Requirements'] = ai_data.get('assurance_requirements', '')
-                df_combined.loc[pandas_index, 'AI_Financial_Integration'] = ai_data.get('financial_integration', '')
+                df_combined.loc[row_number, 'AI_Reporting_Frequency'] = ai_data.get('reporting_frequency', '')
+                df_combined.loc[row_number, 'AI_Document_Sources'] = ai_data.get('document_sources', 0)
+                df_combined.loc[row_number, 'AI_Confidence_Score'] = ai_data.get('confidence_score', 0)
+                df_combined.loc[row_number, 'AI_Filing_Mechanisms'] = ai_data.get('filing_mechanisms', '')
+                df_combined.loc[row_number, 'AI_Assurance_Requirements'] = ai_data.get('assurance_requirements', '')
+                df_combined.loc[row_number, 'AI_Financial_Integration'] = ai_data.get('financial_integration', '')
                 
                 exec_summary = str(ai_data.get('executive_summary', ''))
-                df_combined.loc[pandas_index, 'AI_Executive_Summary'] = exec_summary[:300] + '...' if len(exec_summary) > 300 else exec_summary
+                df_combined.loc[row_number, 'AI_Executive_Summary'] = exec_summary[:300] + '...' if len(exec_summary) > 300 else exec_summary
                 
                 key_reqs = ai_data.get('key_requirements', [])
-                df_combined.loc[pandas_index, 'AI_Top_3_Key_Requirements'] = ', '.join(key_reqs[:3]) if isinstance(key_reqs, list) else ''
+                df_combined.loc[row_number, 'AI_Top_3_Key_Requirements'] = ', '.join(key_reqs[:3]) if isinstance(key_reqs, list) else ''
                 
                 scope = str(ai_data.get('scope_and_applicability', ''))
-                df_combined.loc[pandas_index, 'AI_Scope_and_Applicability'] = scope[:200] + '...' if len(scope) > 200 else scope
+                df_combined.loc[row_number, 'AI_Scope_and_Applicability'] = scope[:200] + '...' if len(scope) > 200 else scope
                 
-                df_combined.loc[pandas_index, 'AI_Processing_Status'] = 'AI Processed'
-                df_combined.loc[pandas_index, 'AI_Processing_Date'] = ai_data.get('processing_metadata', {}).get('processing_date', '')
-                df_combined.loc[pandas_index, 'AI_Model_Used'] = ai_data.get('processing_metadata', {}).get('ai_model_used', '')
-                df_combined.loc[pandas_index, 'AI_Total_Pages_Analyzed'] = ai_data.get('total_pages_analyzed', 0)
+                df_combined.loc[row_number, 'AI_Processing_Date'] = ai_data.get('processing_metadata', {}).get('processing_date', '')
+                df_combined.loc[row_number, 'AI_Model_Used'] = ai_data.get('processing_metadata', {}).get('ai_model_used', '')
+                df_combined.loc[row_number, 'AI_Total_Pages_Analyzed'] = ai_data.get('total_pages_analyzed', 0)
                 
                 gaps = ai_data.get('key_gaps_identified', [])
-                df_combined.loc[pandas_index, 'AI_Key_Gaps_Identified'] = ', '.join(gaps) if isinstance(gaps, list) else str(gaps)
-                
-            else:
-                print(f"    ⚠️  Row {row_number} is outside DataFrame range (pandas index {pandas_index})")
+                df_combined.loc[row_number, 'AI_Key_Gaps_Identified'] = ', '.join(gaps) if isinstance(gaps, list) else str(gaps)
         
-        # Convert back to list of dictionaries for statistics
-        combined_data = df_combined.to_dict('records')
-        # Count processed rows for statistics
-        ai_processed_count = len([row for row in combined_data if row.get('AI_Processing_Status') == 'AI Processed'])
-        print(f"  ✅ Successfully added AI data to {ai_processed_count} rows")
+        # 5. Save combined Excel file
+        output_file = output_dir / "combined_original_and_ai_analysis.xlsx"
+        df_combined.to_excel(output_file, index=False)
         
-        # Create Excel with original + AI columns
-        excel_filename = output_dir / "combined_original_and_ai_analysis.xlsx"
+        # Count statistics
+        processed_count = len(df_combined[df_combined['AI_Processing_Status'] == 'AI Processed'])
+        print(f"  ✅ Combined Excel created: {output_file}")
+        print(f"  📊 {processed_count}/{len(df_combined)} rows have AI analysis ({processed_count/len(df_combined)*100:.1f}% coverage)")
         
-        with pd.ExcelWriter(excel_filename, engine='openpyxl') as writer:
-            # Main combined sheet
-            df_combined.to_excel(writer, sheet_name='Combined_Analysis', index=False)
-            
-            # Statistics sheet
-            processed_count = len([r for r in combined_data if r.get('AI_Processing_Status') == 'AI Processed'])
-            no_esg_count = len([r for r in combined_data if r.get('AI_Processing_Status') == 'No ESG validated file found'])
-            # Convert confidence scores to float for calculations
-            confidence_scores = []
-            for r in combined_data:
-                score = r.get('AI_Confidence_Score', 0)
-                try:
-                    score_float = float(score) if score != '' else 0
-                    if score_float > 0:
-                        confidence_scores.append(score_float)
-                except (ValueError, TypeError):
-                    pass
-            avg_confidence = sum(confidence_scores) / max(len(confidence_scores), 1)
-            
-            stats_data = {
-                'Metric': [
-                    'Total Regulations in Original Excel',
-                    'Regulations with AI Analysis',
-                    'Regulations with No ESG Validated Files',
-                    'AI Processing Coverage Rate',
-                    'Average AI Confidence Score',
-                    'High Confidence Regulations (>0.7)',
-                    'Medium Confidence Regulations (0.4-0.7)',
-                    'Low Confidence Regulations (<0.4)',
-                    'Processing Date'
-                ],
-                'Value': [
-                    len(df_combined),
-                    processed_count,
-                    no_esg_count,
-                    f"{(processed_count/len(df_combined)*100):.1f}%",
-                    f"{avg_confidence:.3f}",
-                    len([r for r in combined_data if safe_float(r.get('AI_Confidence_Score', 0)) > 0.7]),
-                    len([r for r in combined_data if 0.4 <= safe_float(r.get('AI_Confidence_Score', 0)) <= 0.7]),
-                    len([r for r in combined_data if 0 < safe_float(r.get('AI_Confidence_Score', 0)) < 0.4]),
-                    datetime.now().isoformat()
-                ]
-            }
-            
-            stats_df = pd.DataFrame(stats_data)
-            stats_df.to_excel(writer, sheet_name='Coverage_Statistics', index=False)
-            
-            # Auto-adjust column widths for both sheets
-            for sheet_name in writer.sheets:
-                worksheet = writer.sheets[sheet_name]
-                for column in worksheet.columns:
-                    max_length = 0
-                    column_letter = column[0].column_letter
-                    for cell in column:
-                        try:
-                            if len(str(cell.value)) > max_length:
-                                max_length = len(str(cell.value))
-                        except:
-                            pass
-                    adjusted_width = min(max_length + 2, 50)
-                    worksheet.column_dimensions[column_letter].width = adjusted_width
-        
-        print(f"  ✅ Combined Excel created: {excel_filename}")
-        print(f"  📊 {len(df_combined)} total regulations, {processed_count} with AI analysis ({(processed_count/len(df_combined)*100):.1f}% coverage)")
-        
-        return str(excel_filename)
+        return str(output_file)
         
     except Exception as e:
         print(f"  ❌ Error creating combined Excel: {e}")
