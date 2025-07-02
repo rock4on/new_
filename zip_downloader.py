@@ -13,6 +13,8 @@ from pathlib import Path
 from urllib.parse import urlparse
 import argparse
 from datetime import datetime
+import pandas as pd
+from docx import Document
 
 
 class ZipDownloader:
@@ -60,6 +62,7 @@ class ZipDownloader:
             'extracted_files': [],
             'file_count': 0,
             'total_size': 0,
+            'converted_files': [],
             'download_time': 0,
             'extract_time': 0,
             'error': None,
@@ -94,7 +97,11 @@ class ZipDownloader:
             result.update(extracted_info)
             result['status'] = 'success'
             
-            print(f"✅ Extracted {result['file_count']} files in {result['extract_time']:.1f}s")
+            converted_count = len(result.get('converted_files', []))
+            if converted_count > 0:
+                print(f"✅ Extracted {result['file_count']} files in {result['extract_time']:.1f}s ({converted_count} Office docs converted to text)")
+            else:
+                print(f"✅ Extracted {result['file_count']} files in {result['extract_time']:.1f}s")
             
             # Step 3: Handle ZIP file cleanup
             if keep_zip and temp_zip:
@@ -188,10 +195,28 @@ class ZipDownloader:
                 except Exception as e:
                     print(f"  ❌ Failed to extract {file_info.filename}: {e}")
         
+        # Convert .xlsx and .docx files to text
+        converted_files = []
+        for file_path_str in extracted_files:
+            file_path = Path(file_path_str)
+            if file_path.suffix.lower() == '.xlsx':
+                if self._convert_xlsx_to_text(file_path):
+                    converted_files.append(str(file_path.with_suffix('.txt')))
+            elif file_path.suffix.lower() == '.docx':
+                if self._convert_docx_to_text(file_path):
+                    converted_files.append(str(file_path.with_suffix('.txt')))
+        
+        # Add converted text files to extracted files list
+        all_files = extracted_files + converted_files
+        
+        if converted_files:
+            print(f"  📝 Converted {len(converted_files)} Office documents to text")
+        
         return {
-            'extracted_files': extracted_files,
-            'file_count': len(extracted_files),
-            'total_size': total_size
+            'extracted_files': all_files,
+            'file_count': len(all_files),
+            'total_size': total_size,
+            'converted_files': converted_files
         }
     
     def _get_filename_from_url(self, url: str) -> str:
@@ -203,6 +228,91 @@ class ZipDownloader:
             filename = 'download.zip'
         
         return filename
+    
+    def _convert_xlsx_to_text(self, xlsx_path: Path) -> bool:
+        """Convert .xlsx file to .txt file"""
+        try:
+            # Read all sheets from the Excel file
+            excel_file = pd.ExcelFile(xlsx_path)
+            all_text_parts = []
+            
+            for sheet_name in excel_file.sheet_names:
+                try:
+                    df = pd.read_excel(xlsx_path, sheet_name=sheet_name)
+                    
+                    # Convert DataFrame to text
+                    sheet_text_parts = [f"Sheet: {sheet_name}\n"]
+                    
+                    # Add column headers
+                    if not df.empty:
+                        headers = df.columns.tolist()
+                        sheet_text_parts.append("Columns: " + " | ".join(str(h) for h in headers) + "\n")
+                        
+                        # Add row data (convert all values to strings and handle NaN)
+                        for _, row in df.iterrows():
+                            row_text = " | ".join(str(val) if pd.notna(val) else "" for val in row.values)
+                            if row_text.strip():  # Only add non-empty rows
+                                sheet_text_parts.append(row_text)
+                    
+                    all_text_parts.append("\n".join(sheet_text_parts))
+                    
+                except Exception as sheet_error:
+                    print(f"    ⚠️  Warning: Failed to read sheet '{sheet_name}' from {xlsx_path.name}: {sheet_error}")
+                    continue
+            
+            # Write text to .txt file
+            text_content = "\n\n".join(all_text_parts) if all_text_parts else ""
+            if text_content:
+                txt_path = xlsx_path.with_suffix('.txt')
+                with open(txt_path, 'w', encoding='utf-8') as f:
+                    f.write(text_content)
+                print(f"    📝 Converted {xlsx_path.name} to {txt_path.name}")
+                return True
+            else:
+                print(f"    ⚠️  No content extracted from {xlsx_path.name}")
+                return False
+                
+        except Exception as e:
+            print(f"    ❌ Error converting {xlsx_path.name} to text: {e}")
+            return False
+    
+    def _convert_docx_to_text(self, docx_path: Path) -> bool:
+        """Convert .docx file to .txt file"""
+        try:
+            doc = Document(docx_path)
+            text_parts = []
+            
+            # Extract text from paragraphs
+            for paragraph in doc.paragraphs:
+                if paragraph.text.strip():
+                    text_parts.append(paragraph.text.strip())
+            
+            # Extract text from tables
+            for table in doc.tables:
+                table_text_parts = []
+                for row in table.rows:
+                    row_text = " | ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
+                    if row_text:
+                        table_text_parts.append(row_text)
+                
+                if table_text_parts:
+                    text_parts.append("Table:\n" + "\n".join(table_text_parts))
+            
+            # Write text to .txt file
+            text_content = "\n\n".join(text_parts) if text_parts else ""
+            if text_content:
+                txt_path = docx_path.with_suffix('.txt')
+                with open(txt_path, 'w', encoding='utf-8') as f:
+                    f.write(text_content)
+                print(f"    📝 Converted {docx_path.name} to {txt_path.name}")
+                return True
+            else:
+                print(f"    ⚠️  No content extracted from {docx_path.name}")
+                return False
+                
+        except Exception as e:
+            print(f"    ❌ Error converting {docx_path.name} to text: {e}")
+            return False
     
     def download_multiple(self, urls: list, extract_to: str = None, 
                          keep_zips: bool = False, overwrite: bool = False) -> list:
