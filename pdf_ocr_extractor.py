@@ -5,7 +5,7 @@ PDF OCR Text Extractor
 Extracts text from PDF files using OCR (Optical Character Recognition).
 Handles both text-based PDFs and scanned/image-based PDFs.
 """
-
+ 
 import os
 import sys
 from pathlib import Path

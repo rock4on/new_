@@ -151,7 +151,7 @@ class PDFOpenAIDirect:
                                 custom_prompt: Optional[str] = None,
                                 max_tokens: int = 4000) -> str:
         """
-        Extract text from PDF using OpenAI's direct PDF processing.
+        Extract text from PDF using OpenAI's file upload and processing.
         
         Args:
             pdf_path: Path to PDF file
@@ -162,17 +162,17 @@ class PDFOpenAIDirect:
             Extracted text
         """
         try:
-            print(f"🤖 Processing PDF with OpenAI: {pdf_path}")
+            print(f"🤖 Uploading PDF to OpenAI: {pdf_path}")
             
             # Check file size (OpenAI has limits)
             file_size = pdf_path.stat().st_size
-            max_size_mb = 100  # Typical limit for file uploads
+            max_size_mb = 512  # OpenAI file upload limit
             if file_size > max_size_mb * 1024 * 1024:
-                print(f"⚠️  Warning: PDF is {file_size / (1024*1024):.1f}MB, may exceed OpenAI limits")
+                raise ValueError(f"PDF is {file_size / (1024*1024):.1f}MB, exceeds OpenAI {max_size_mb}MB limit")
             
             # Default prompt for OCR/text extraction
             if custom_prompt is None:
-                prompt = """Please extract all text content from this PDF document. 
+                prompt = """Please extract all text content from the uploaded PDF document. 
 
 Instructions:
 1. Extract ALL visible text accurately and completely
@@ -188,46 +188,61 @@ Please provide the complete text extraction:"""
             else:
                 prompt = custom_prompt
             
-            # Upload file and process
+            # Upload file to OpenAI
             with open(pdf_path, 'rb') as f:
-                # Use the files API for document processing
+                file_response = self.client.files.create(
+                    file=f,
+                    purpose="assistants"  # or "fine-tune" depending on your use case
+                )
+            
+            file_id = file_response.id
+            print(f"📤 File uploaded with ID: {file_id}")
+            
+            try:
+                # Process the uploaded file
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=[
                         {
                             "role": "user",
-                            "content": [
-                                {"type": "text", "text": prompt},
-                                {
-                                    "type": "document",
-                                    "document": {
-                                        "data": f.read(),
-                                        "detail": "high"
-                                    }
-                                }
-                            ]
+                            "content": f"{prompt}\n\nFile ID: {file_id}"
                         }
                     ],
                     max_tokens=max_tokens,
                     temperature=0  # Use deterministic output for text extraction
                 )
-            
-            extracted_text = response.choices[0].message.content
-            
-            if extracted_text:
-                print(f"✅ Text extraction successful ({len(extracted_text)} characters)")
-                return extracted_text
-            else:
-                print("❌ No text extracted")
-                return ""
+                
+                extracted_text = response.choices[0].message.content
+                
+                if extracted_text:
+                    print(f"✅ Text extraction successful ({len(extracted_text)} characters)")
+                    return extracted_text
+                else:
+                    print("❌ No text extracted")
+                    return ""
+                    
+            finally:
+                # Clean up uploaded file
+                try:
+                    self.client.files.delete(file_id)
+                    print(f"🗑️  Deleted uploaded file: {file_id}")
+                except:
+                    print(f"⚠️  Could not delete uploaded file: {file_id}")
             
         except Exception as e:
             print(f"❌ OpenAI text extraction failed: {e}")
             
-            # If direct PDF processing fails, suggest alternatives
-            if "document" in str(e).lower() or "unsupported" in str(e).lower():
-                print("💡 This model may not support direct PDF input.")
-                print("💡 Try using the image-based OCR version (pdf_openai_ocr.py)")
+            # Provide helpful error messages
+            if "file" in str(e).lower() and "unsupported" in str(e).lower():
+                print("💡 OpenAI may not support direct PDF processing with this model.")
+                print("💡 Consider using:")
+                print("   1. The image-based OCR version (pdf_openai_ocr.py)")
+                print("   2. Converting PDF to text first with PyPDF2")
+                print("   3. Using a different OpenAI model")
+            elif "limit" in str(e).lower() or "size" in str(e).lower():
+                print("💡 File too large for OpenAI. Try:")
+                print("   1. Splitting the PDF into smaller parts")
+                print("   2. Using the image-based OCR with page limits")
             
             return ""
     
