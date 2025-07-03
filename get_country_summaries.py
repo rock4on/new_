@@ -63,7 +63,7 @@ def load_country_summaries(output_dir: str = "file_metadata_analysis_results") -
 
 def save_consolidated_summaries(summaries: List[Dict[str, Any]], output_file: str = "consolidated_country_summaries.json") -> str:
     """
-    Save all country summaries into a single consolidated JSON file.
+    Save all country summaries as a simple array in JSON file.
     
     Args:
         summaries: List of country summary dictionaries
@@ -72,28 +72,16 @@ def save_consolidated_summaries(summaries: List[Dict[str, Any]], output_file: st
     Returns:
         Path to the saved file
     """
-    from datetime import datetime
-    
-    consolidated_data = {
-        'consolidation_metadata': {
-            'created_at': datetime.now().isoformat(),
-            'total_countries': len(summaries),
-            'source_files': [s.get('summary_file_path', '') for s in summaries],
-            'consolidated_by': 'get_country_summaries.py'
-        },
-        'global_statistics': {
-            'total_countries': len(summaries),
-            'total_regulations': sum(s.get('total_regulations', 0) for s in summaries),
-            'total_documents_processed': sum(s.get('total_documents_processed', 0) for s in summaries),
-            'total_esg_relevant_documents': sum(s.get('total_esg_relevant_documents', 0) for s in summaries),
-            'total_documents_found': sum(s.get('total_documents_found', 0) for s in summaries)
-        },
-        'country_summaries': summaries
-    }
+    # Clean up the summaries by removing file path info
+    clean_summaries = []
+    for summary in summaries:
+        clean_summary = summary.copy()
+        clean_summary.pop('summary_file_path', None)
+        clean_summaries.append(clean_summary)
     
     output_path = Path(output_file)
     with open(output_path, 'w', encoding='utf-8') as f:
-        json.dump(consolidated_data, f, indent=2, ensure_ascii=False)
+        json.dump(clean_summaries, f, indent=2, ensure_ascii=False)
     
     return str(output_path)
 
