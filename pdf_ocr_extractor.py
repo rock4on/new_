@@ -13,7 +13,7 @@ from typing import Optional, List
 import argparse
 import json
 import time
-
+#
 try:
     import pytesseract
     from PIL import Image
