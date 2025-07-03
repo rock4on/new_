@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""
+Country Summary Collector
+
+Gets an array of all {country_name}_summary.json files from the file_metadata_processor output.
+"""
+
+import json
+from pathlib import Path
+from typing import List, Dict, Any
+
+
+def get_country_summary_files(output_dir: str = "file_metadata_analysis_results") -> List[Path]:
+    """
+    Get all {country_name}_summary.json files from the output directory.
+    
+    Args:
+        output_dir: Directory where file_metadata_processor saves results
+        
+    Returns:
+        List of Path objects pointing to summary files
+    """
+    output_path = Path(output_dir)
+    
+    if not output_path.exists():
+        print(f"Output directory does not exist: {output_path}")
+        return []
+    
+    # Find all *_summary.json files
+    summary_files = list(output_path.glob("**/*_summary.json"))
+    
+    # Filter to only country summaries (exclude other summary types)
+    country_summaries = [f for f in summary_files if not f.name.startswith('esg_') and not f.name.startswith('final_')]
+    
+    return country_summaries
+
+
+def load_country_summaries(output_dir: str = "file_metadata_analysis_results") -> List[Dict[str, Any]]:
+    """
+    Load all country summary data into memory.
+    
+    Args:
+        output_dir: Directory where file_metadata_processor saves results
+        
+    Returns:
+        List of dictionaries containing country summary data
+    """
+    summary_files = get_country_summary_files(output_dir)
+    summaries = []
+    
+    for file_path in summary_files:
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                # Add file path info to the data
+                data['summary_file_path'] = str(file_path)
+                summaries.append(data)
+        except Exception as e:
+            print(f"Error loading {file_path}: {e}")
+    
+    return summaries
+
+
+def main():
+    """Main function to demonstrate usage"""
+    
+    # Get file paths
+    print("🔍 Finding country summary files...")
+    summary_files = get_country_summary_files()
+    
+    if not summary_files:
+        print("❌ No country summary files found.")
+        print("💡 Make sure file_metadata_processor.py has been run first.")
+        return
+    
+    print(f"✅ Found {len(summary_files)} country summary files:")
+    for file_path in summary_files:
+        print(f"  📄 {file_path}")
+    
+    # Load the data
+    print("\n📊 Loading country summary data...")
+    summaries = load_country_summaries()
+    
+    if summaries:
+        print(f"✅ Loaded {len(summaries)} country summaries")
+        
+        # Show basic stats
+        total_regulations = sum(s.get('total_regulations', 0) for s in summaries)
+        total_docs = sum(s.get('total_documents_processed', 0) for s in summaries)
+        total_esg = sum(s.get('total_esg_relevant_documents', 0) for s in summaries)
+        
+        print(f"\n📈 Summary Statistics:")
+        print(f"  🌍 Countries: {len(summaries)}")
+        print(f"  📋 Total Regulations: {total_regulations}")
+        print(f"  📄 Total Documents: {total_docs}")
+        print(f"  🎯 ESG Relevant: {total_esg}")
+        
+        # Show country breakdown
+        print(f"\n🌍 Countries found:")
+        for summary in summaries:
+            country = summary.get('country', 'Unknown')
+            regs = summary.get('total_regulations', 0)
+            docs = summary.get('total_documents_processed', 0)
+            esg = summary.get('total_esg_relevant_documents', 0)
+            print(f"  {country}: {regs} regulations, {docs} docs, {esg} ESG relevant")
+    
+    return summary_files
+
+
+if __name__ == "__main__":
+    main()
