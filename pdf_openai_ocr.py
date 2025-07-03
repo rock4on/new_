@@ -20,13 +20,14 @@ from urllib.parse import urlparse
 
 try:
     import openai
-    import pdf2image
     from PIL import Image
     import PyPDF2
     import requests
+    import fitz  # PyMuPDF - alternative to pdf2image
 except ImportError as e:
     print(f"❌ Missing required dependency: {e}")
-    print("💡 Install with: pip install openai pdf2image pillow PyPDF2 requests")
+    print("💡 Install with: pip install openai pillow PyPDF2 requests PyMuPDF")
+    print("💡 PyMuPDF is used instead of pdf2image to avoid poppler dependency")
     sys.exit(1)
 
 
@@ -253,7 +254,65 @@ class PDFOpenAIOCR:
             print(f"❌ OpenAI OCR failed for page {page_num}: {e}")
             return ""
     
-    def extract_text_openai_ocr(self, pdf_path: Path, dpi: int = 300, 
+    def pdf_to_images_pymupdf(self, pdf_path: Path, dpi: int = 150, 
+                             max_pages: Optional[int] = None) -> List[Image.Image]:
+        """
+        Convert PDF to images using PyMuPDF (no poppler dependency).
+        
+        Args:
+            pdf_path: Path to PDF file
+            dpi: Resolution for image conversion
+            max_pages: Maximum number of pages to process
+            
+        Returns:
+            List of PIL Images
+        """
+        try:
+            print(f"🔍 Converting PDF to images using PyMuPDF (DPI: {dpi})...")
+            
+            # Open PDF with PyMuPDF
+            doc = fitz.open(pdf_path)
+            images = []
+            
+            # Limit pages if specified
+            page_count = len(doc)
+            if max_pages:
+                page_count = min(page_count, max_pages)
+            
+            print(f"📄 Converting {page_count} pages...")
+            
+            # Convert each page to image
+            for page_num in range(page_count):
+                try:
+                    page = doc[page_num]
+                    
+                    # Create transformation matrix for DPI
+                    zoom = dpi / 72.0  # 72 is default DPI
+                    mat = fitz.Matrix(zoom, zoom)
+                    
+                    # Render page to pixmap
+                    pix = page.get_pixmap(matrix=mat)
+                    
+                    # Convert to PIL Image
+                    img_data = pix.tobytes("ppm")
+                    image = Image.open(BytesIO(img_data))
+                    
+                    images.append(image)
+                    print(f"  ✅ Page {page_num + 1} converted")
+                    
+                except Exception as e:
+                    print(f"  ❌ Failed to convert page {page_num + 1}: {e}")
+                    continue
+            
+            doc.close()
+            print(f"✅ Converted {len(images)} pages to images")
+            return images
+            
+        except Exception as e:
+            print(f"❌ PDF to image conversion failed: {e}")
+            return []
+
+    def extract_text_openai_ocr(self, pdf_path: Path, dpi: int = 150, 
                                max_pages: Optional[int] = None,
                                custom_prompt: Optional[str] = None) -> str:
         """
@@ -261,7 +320,7 @@ class PDFOpenAIOCR:
         
         Args:
             pdf_path: Path to PDF file
-            dpi: Resolution for image conversion
+            dpi: Resolution for image conversion (150 is good balance of quality/speed)
             max_pages: Maximum number of pages to process (None for all)
             custom_prompt: Custom extraction prompt
             
@@ -269,18 +328,12 @@ class PDFOpenAIOCR:
             Extracted text
         """
         try:
-            print(f"🔍 Converting PDF to images (DPI: {dpi})...")
+            # Convert PDF to images using PyMuPDF
+            images = self.pdf_to_images_pymupdf(pdf_path, dpi=dpi, max_pages=max_pages)
             
-            # Convert PDF to images
-            images = pdf2image.convert_from_path(
-                pdf_path,
-                dpi=dpi,
-                fmt='PNG'
-            )
-            
-            # Limit pages if specified
-            if max_pages:
-                images = images[:max_pages]
+            if not images:
+                print("❌ No images generated from PDF")
+                return ""
             
             print(f"📄 Processing {len(images)} pages with OpenAI Vision...")
             
@@ -489,8 +542,8 @@ def main():
     parser.add_argument('-o', '--output', help='Output file path')
     parser.add_argument('-m', '--method', choices=['traditional', 'openai', 'hybrid'], 
                        default='hybrid', help='Extraction method (default: hybrid)')
-    parser.add_argument('-d', '--dpi', type=int, default=300, 
-                       help='DPI for image conversion (default: 300)')
+    parser.add_argument('-d', '--dpi', type=int, default=150, 
+                       help='DPI for image conversion (default: 150, good balance of quality/speed)')
     parser.add_argument('--max-pages', type=int, 
                        help='Maximum pages to process with OpenAI (to control costs)')
     parser.add_argument('--model', default='gpt-4o',
