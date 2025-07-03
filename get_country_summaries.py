@@ -61,6 +61,43 @@ def load_country_summaries(output_dir: str = "file_metadata_analysis_results") -
     return summaries
 
 
+def save_consolidated_summaries(summaries: List[Dict[str, Any]], output_file: str = "consolidated_country_summaries.json") -> str:
+    """
+    Save all country summaries into a single consolidated JSON file.
+    
+    Args:
+        summaries: List of country summary dictionaries
+        output_file: Output filename for consolidated data
+        
+    Returns:
+        Path to the saved file
+    """
+    from datetime import datetime
+    
+    consolidated_data = {
+        'consolidation_metadata': {
+            'created_at': datetime.now().isoformat(),
+            'total_countries': len(summaries),
+            'source_files': [s.get('summary_file_path', '') for s in summaries],
+            'consolidated_by': 'get_country_summaries.py'
+        },
+        'global_statistics': {
+            'total_countries': len(summaries),
+            'total_regulations': sum(s.get('total_regulations', 0) for s in summaries),
+            'total_documents_processed': sum(s.get('total_documents_processed', 0) for s in summaries),
+            'total_esg_relevant_documents': sum(s.get('total_esg_relevant_documents', 0) for s in summaries),
+            'total_documents_found': sum(s.get('total_documents_found', 0) for s in summaries)
+        },
+        'country_summaries': summaries
+    }
+    
+    output_path = Path(output_file)
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(consolidated_data, f, indent=2, ensure_ascii=False)
+    
+    return str(output_path)
+
+
 def main():
     """Main function to demonstrate usage"""
     
@@ -103,6 +140,11 @@ def main():
             docs = summary.get('total_documents_processed', 0)
             esg = summary.get('total_esg_relevant_documents', 0)
             print(f"  {country}: {regs} regulations, {docs} docs, {esg} ESG relevant")
+        
+        # Save consolidated file
+        print(f"\n💾 Saving consolidated summaries...")
+        consolidated_file = save_consolidated_summaries(summaries)
+        print(f"✅ Consolidated summaries saved to: {consolidated_file}")
     
     return summary_files
 
