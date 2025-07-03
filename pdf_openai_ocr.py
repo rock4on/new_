@@ -15,28 +15,33 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 import argparse
 from io import BytesIO
+import tempfile
+from urllib.parse import urlparse
 
 try:
     import openai
     import pdf2image
     from PIL import Image
     import PyPDF2
+    import requests
 except ImportError as e:
     print(f"❌ Missing required dependency: {e}")
-    print("💡 Install with: pip install openai pdf2image pillow PyPDF2")
+    print("💡 Install with: pip install openai pdf2image pillow PyPDF2 requests")
     sys.exit(1)
 
 
 class PDFOpenAIOCR:
     """Extract text from PDFs using OpenAI Vision API"""
     
-    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4o"):
+    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4o", 
+                 base_url: Optional[str] = None):
         """
         Initialize the PDF OpenAI OCR extractor.
         
         Args:
             api_key: OpenAI API key (uses OPENAI_API_KEY env var if None)
             model: OpenAI model to use (gpt-4o, gpt-4-vision-preview)
+            base_url: Custom API endpoint URL (uses OpenAI default if None)
         """
         # Set API key
         if api_key:
@@ -47,12 +52,104 @@ class PDFOpenAIOCR:
             print("💡 Get your API key from: https://platform.openai.com/api-keys")
             sys.exit(1)
         
-        self.client = openai.OpenAI(api_key=api_key)
-        self.model = model
+        # Initialize client with custom base URL if provided
+        client_kwargs = {}
+        if api_key:
+            client_kwargs['api_key'] = api_key
+        if base_url:
+            client_kwargs['base_url'] = base_url
+            print(f"🔗 Using custom API endpoint: {base_url}")
         
-        # Check if model supports vision
-        if model not in ["gpt-4o", "gpt-4-vision-preview", "gpt-4o-mini"]:
+        self.client = openai.OpenAI(**client_kwargs)
+        self.model = model
+        self.base_url = base_url
+        
+        # Check if model supports vision (skip warning for custom endpoints)
+        if not base_url and model not in ["gpt-4o", "gpt-4-vision-preview", "gpt-4o-mini"]:
             print(f"⚠️  Warning: Model {model} may not support vision capabilities")
+    
+    def download_pdf_from_url(self, url: str, output_dir: Optional[Path] = None) -> Path:
+        """
+        Download PDF from URL to temporary file.
+        
+        Args:
+            url: URL to PDF file
+            output_dir: Directory to save PDF (uses temp dir if None)
+            
+        Returns:
+            Path to downloaded PDF file
+        """
+        try:
+            print(f"📥 Downloading PDF from: {url}")
+            
+            # Parse URL to get filename
+            parsed_url = urlparse(url)
+            filename = Path(parsed_url.path).name
+            if not filename or not filename.endswith('.pdf'):
+                filename = 'downloaded_document.pdf'
+            
+            # Set output directory
+            if output_dir is None:
+                output_dir = Path(tempfile.gettempdir())
+            
+            output_path = output_dir / filename
+            
+            # Download with progress
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+            
+            response = requests.get(url, headers=headers, stream=True)
+            response.raise_for_status()
+            
+            # Check if it's actually a PDF
+            content_type = response.headers.get('content-type', '').lower()
+            if 'pdf' not in content_type:
+                print(f"⚠️  Warning: Content-Type is '{content_type}', not PDF")
+            
+            # Save file
+            total_size = int(response.headers.get('content-length', 0))
+            with open(output_path, 'wb') as f:
+                if total_size > 0:
+                    downloaded = 0
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            progress = (downloaded / total_size) * 100
+                            print(f"\r  📊 Progress: {progress:.1f}% ({downloaded:,}/{total_size:,} bytes)", end='')
+                    print()  # New line after progress
+                else:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                    print(f"  📊 Downloaded: {output_path.stat().st_size:,} bytes")
+            
+            print(f"✅ PDF downloaded to: {output_path}")
+            return output_path
+            
+        except requests.RequestException as e:
+            print(f"❌ Failed to download PDF: {e}")
+            raise
+        except Exception as e:
+            print(f"❌ Error downloading PDF: {e}")
+            raise
+    
+    def is_url(self, path_or_url: str) -> bool:
+        """
+        Check if string is a URL.
+        
+        Args:
+            path_or_url: String to check
+            
+        Returns:
+            True if it's a URL, False otherwise
+        """
+        try:
+            result = urlparse(path_or_url)
+            return all([result.scheme, result.netloc])
+        except:
+            return False
     
     def extract_text_traditional(self, pdf_path: Path) -> str:
         """
@@ -267,62 +364,128 @@ class PDFOpenAIOCR:
                 print("❌ OpenAI OCR failed")
                 return traditional_text  # Return whatever we got
     
-    def extract_to_json(self, pdf_path: Path, output_path: Optional[Path] = None,
-                       method: str = 'hybrid', **kwargs) -> Path:
+    def extract_to_json(self, pdf_path_or_url: str, output_path: Optional[Path] = None,
+                       method: str = 'hybrid', cleanup_temp: bool = True, **kwargs) -> Path:
         """
-        Extract text and save as JSON with metadata.
+        Extract text and save as JSON with metadata. Supports both file paths and URLs.
         
         Args:
-            pdf_path: Path to PDF file
+            pdf_path_or_url: Path to PDF file or URL to PDF
             output_path: Output JSON file path (auto-generate if None)
             method: 'traditional', 'openai', or 'hybrid'
+            cleanup_temp: Whether to delete temporary downloaded files
             **kwargs: Additional arguments for extraction methods
             
         Returns:
             Path to output JSON file
         """
-        if output_path is None:
-            output_path = pdf_path.with_suffix('.json')
+        temp_file = None
+        original_source = pdf_path_or_url
         
-        start_time = time.time()
+        try:
+            # Check if it's a URL and download if needed
+            if self.is_url(pdf_path_or_url):
+                temp_file = self.download_pdf_from_url(pdf_path_or_url)
+                pdf_path = temp_file
+            else:
+                pdf_path = Path(pdf_path_or_url)
+                if not pdf_path.exists():
+                    raise FileNotFoundError(f"PDF file not found: {pdf_path}")
+            
+            if output_path is None:
+                if self.is_url(pdf_path_or_url):
+                    # Generate output name from URL
+                    parsed_url = urlparse(pdf_path_or_url)
+                    filename = Path(parsed_url.path).name
+                    if not filename or not filename.endswith('.pdf'):
+                        filename = 'downloaded_document.pdf'
+                    output_path = Path(filename).with_suffix('.json')
+                else:
+                    output_path = pdf_path.with_suffix('.json')
+            
+            start_time = time.time()
+            
+            # Extract text based on method
+            if method == 'traditional':
+                text = self.extract_text_traditional(pdf_path)
+            elif method == 'openai':
+                text = self.extract_text_openai_ocr(pdf_path, **kwargs)
+            elif method == 'hybrid':
+                text = self.extract_text_hybrid(pdf_path, **kwargs)
+            else:
+                raise ValueError(f"Unknown method: {method}")
+            
+            extraction_time = time.time() - start_time
+            
+            # Create JSON with metadata
+            result = {
+                'source': original_source,
+                'source_type': 'url' if self.is_url(original_source) else 'file',
+                'local_file': str(pdf_path),
+                'extraction_method': method,
+                'extraction_time_seconds': round(extraction_time, 2),
+                'file_size_bytes': pdf_path.stat().st_size,
+                'text_length': len(text),
+                'word_count': len(text.split()),
+                'openai_model': self.model if method in ['openai', 'hybrid'] else None,
+                'openai_base_url': self.base_url if method in ['openai', 'hybrid'] else None,
+                'extracted_text': text,
+                'extracted_at': time.strftime('%Y-%m-%d %H:%M:%S')
+            }
+            
+            # Save to JSON file
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(result, f, indent=2, ensure_ascii=False)
+            
+            print(f"💾 JSON saved to: {output_path}")
+            return output_path
+            
+        finally:
+            # Clean up temporary file if requested
+            if temp_file and cleanup_temp:
+                try:
+                    temp_file.unlink()
+                    print(f"🗑️  Cleaned up temporary file: {temp_file}")
+                except Exception as e:
+                    print(f"⚠️  Could not delete temporary file {temp_file}: {e}")
+    
+    def extract_text_from_url(self, url: str, method: str = 'hybrid', **kwargs) -> str:
+        """
+        Extract text directly from PDF URL.
         
-        # Extract text based on method
-        if method == 'traditional':
-            text = self.extract_text_traditional(pdf_path)
-        elif method == 'openai':
-            text = self.extract_text_openai_ocr(pdf_path, **kwargs)
-        elif method == 'hybrid':
-            text = self.extract_text_hybrid(pdf_path, **kwargs)
-        else:
-            raise ValueError(f"Unknown method: {method}")
-        
-        extraction_time = time.time() - start_time
-        
-        # Create JSON with metadata
-        result = {
-            'source_file': str(pdf_path),
-            'extraction_method': method,
-            'extraction_time_seconds': round(extraction_time, 2),
-            'file_size_bytes': pdf_path.stat().st_size,
-            'text_length': len(text),
-            'word_count': len(text.split()),
-            'openai_model': self.model if method in ['openai', 'hybrid'] else None,
-            'extracted_text': text,
-            'extracted_at': time.strftime('%Y-%m-%d %H:%M:%S')
-        }
-        
-        # Save to JSON file
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(result, f, indent=2, ensure_ascii=False)
-        
-        print(f"💾 JSON saved to: {output_path}")
-        return output_path
+        Args:
+            url: URL to PDF file
+            method: 'traditional', 'openai', or 'hybrid'
+            **kwargs: Additional arguments for extraction methods
+            
+        Returns:
+            Extracted text
+        """
+        temp_file = None
+        try:
+            temp_file = self.download_pdf_from_url(url)
+            
+            if method == 'traditional':
+                return self.extract_text_traditional(temp_file)
+            elif method == 'openai':
+                return self.extract_text_openai_ocr(temp_file, **kwargs)
+            elif method == 'hybrid':
+                return self.extract_text_hybrid(temp_file, **kwargs)
+            else:
+                raise ValueError(f"Unknown method: {method}")
+                
+        finally:
+            if temp_file:
+                try:
+                    temp_file.unlink()
+                except:
+                    pass
 
 
 def main():
     """Command line interface"""
-    parser = argparse.ArgumentParser(description='Extract text from PDF using OpenAI Vision API')
-    parser.add_argument('pdf_file', help='Path to PDF file')
+    parser = argparse.ArgumentParser(description='Extract text from PDF using OpenAI Vision API (supports files and URLs)')
+    parser.add_argument('pdf_source', help='Path to PDF file or URL to PDF')
     parser.add_argument('-o', '--output', help='Output file path')
     parser.add_argument('-m', '--method', choices=['traditional', 'openai', 'hybrid'], 
                        default='hybrid', help='Extraction method (default: hybrid)')
@@ -333,20 +496,32 @@ def main():
     parser.add_argument('--model', default='gpt-4o',
                        help='OpenAI model to use (default: gpt-4o)')
     parser.add_argument('--api-key', help='OpenAI API key (or set OPENAI_API_KEY env var)')
+    parser.add_argument('--base-url', help='Custom OpenAI API endpoint URL')
     parser.add_argument('--custom-prompt', help='Custom prompt for OpenAI OCR')
+    parser.add_argument('--no-cleanup', action='store_true',
+                       help='Keep temporary downloaded files (for URLs)')
     parser.add_argument('-j', '--json', action='store_true', 
                        help='Save as JSON with metadata')
     
     args = parser.parse_args()
     
-    # Check if PDF file exists
-    pdf_path = Path(args.pdf_file)
-    if not pdf_path.exists():
-        print(f"❌ PDF file not found: {pdf_path}")
-        sys.exit(1)
-    
     # Initialize extractor
-    extractor = PDFOpenAIOCR(api_key=args.api_key, model=args.model)
+    extractor = PDFOpenAIOCR(
+        api_key=args.api_key, 
+        model=args.model,
+        base_url=args.base_url
+    )
+    
+    # Check if it's a URL or file
+    if extractor.is_url(args.pdf_source):
+        print(f"🌐 Processing PDF from URL: {args.pdf_source}")
+    else:
+        # Check if local file exists
+        pdf_path = Path(args.pdf_source)
+        if not pdf_path.exists():
+            print(f"❌ PDF file not found: {pdf_path}")
+            sys.exit(1)
+        print(f"📄 Processing local PDF file: {pdf_path}")
     
     # Set output path
     output_path = Path(args.output) if args.output else None
@@ -354,9 +529,10 @@ def main():
     try:
         # Extract text
         result_path = extractor.extract_to_json(
-            pdf_path=pdf_path,
+            pdf_path_or_url=args.pdf_source,
             output_path=output_path,
             method=args.method,
+            cleanup_temp=not args.no_cleanup,
             dpi=args.dpi,
             max_pages=args.max_pages,
             custom_prompt=args.custom_prompt
