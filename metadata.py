@@ -57,9 +57,17 @@ class ESGMetadata(BaseModel):
 
     @validator('translated_flag')
     def validate_translated_flag(cls, v):
-        if v.lower() not in ['yes', 'no']:
+        if v is None:
             return 'no'
-        return v.lower()
+        if str(v).lower() not in ['yes', 'no']:
+            return 'no'
+        return str(v).lower()
+
+    @validator('*', pre=True)
+    def ensure_string(cls, v):
+        if v is None:
+            return "Unknown"
+        return str(v)
 
 
 class LightMetadata(BaseModel):
