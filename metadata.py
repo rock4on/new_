@@ -224,17 +224,21 @@ def extract_snippets_around_keywords(text: str, keywords: List[str], window: int
 
  
 
-def is_metadata_complete(meta: Optional[ESGMetadata]) -> bool:
+def is_metadata_complete(meta: ESGMetadata) -> bool:
 
-    if meta is None:
-
-        return False
-
-    return True  # Pydantic validation ensures all required fields are present
+    # Check if metadata has meaningful content (not all "Unknown")
+    unknown_fields = sum(1 for field in ['jurisdiction', 'issuing_body', 'tag', 'regulation_name', 
+                                       'publication_date', 'regulation_status', 'summary', 
+                                       'applicability', 'scoping_threshold', 'filing_mechanism',
+                                       'reporting_frequency', 'assurance_requirement', 'full_text_link']
+                        if getattr(meta, field) == "Unknown")
+    
+    # Consider complete if less than half the fields are "Unknown"
+    return unknown_fields < 7
 
  
 
-def run_llm(text: str, url: str, country: str, last_scraped: str) -> Optional[ESGMetadata]:
+def run_llm(text: str, url: str, country: str, last_scraped: str) -> ESGMetadata:
 
     system_msg = (
 
@@ -316,15 +320,129 @@ Document Text:
 
                 print(f"[VALIDATION ERROR] {validation_error}")
 
-                return None
+                # Return default metadata if validation fails
 
-        return None
+                return ESGMetadata(
+
+                    country=country,
+
+                    jurisdiction="Unknown",
+
+                    issuing_body="Unknown",
+
+                    tag="Unknown",
+
+                    regulation_name="Unknown",
+
+                    publication_date="Unknown",
+
+                    regulation_status="Unknown",
+
+                    summary="Unable to extract sufficient information",
+
+                    applicability="Unknown",
+
+                    scoping_threshold="Unknown",
+
+                    filing_mechanism="Unknown",
+
+                    reporting_frequency="Unknown",
+
+                    assurance_requirement="Unknown",
+
+                    full_text_link="Unknown",
+
+                    source_url=url,
+
+                    last_scraped=last_scraped,
+
+                    change_detected="Unknown"
+
+                )
+
+        # Return default metadata if parsing fails
+
+        return ESGMetadata(
+
+            country=country,
+
+            jurisdiction="Unknown",
+
+            issuing_body="Unknown",
+
+            tag="Unknown",
+
+            regulation_name="Unknown",
+
+            publication_date="Unknown",
+
+            regulation_status="Unknown",
+
+            summary="Unable to extract sufficient information",
+
+            applicability="Unknown",
+
+            scoping_threshold="Unknown",
+
+            filing_mechanism="Unknown",
+
+            reporting_frequency="Unknown",
+
+            assurance_requirement="Unknown",
+
+            full_text_link="Unknown",
+
+            source_url=url,
+
+            last_scraped=last_scraped,
+
+            change_detected="Unknown"
+
+        )
 
     except Exception as e:
 
         print(f"[LLM ERROR] {e}")
 
-        return None
+        # Return default metadata if LLM call fails
+
+        return ESGMetadata(
+
+            country=country,
+
+            jurisdiction="Unknown",
+
+            issuing_body="Unknown",
+
+            tag="Unknown",
+
+            regulation_name="Unknown",
+
+            publication_date="Unknown",
+
+            regulation_status="Unknown",
+
+            summary="Unable to extract sufficient information",
+
+            applicability="Unknown",
+
+            scoping_threshold="Unknown",
+
+            filing_mechanism="Unknown",
+
+            reporting_frequency="Unknown",
+
+            assurance_requirement="Unknown",
+
+            full_text_link="Unknown",
+
+            source_url=url,
+
+            last_scraped=last_scraped,
+
+            change_detected="Unknown"
+
+        )
 
  
 
