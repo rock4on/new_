@@ -130,51 +130,16 @@ class PDFOCRExtractor:
             print(f"❌ OCR extraction failed: {e}")
             return ""
     
-    def extract_text_hybrid(self, pdf_path: Path, dpi: int = 300, lang: str = 'eng', 
-                           min_text_threshold: int = 100) -> str:
-        """
-        Try traditional extraction first, fall back to OCR if insufficient text.
-        
-        Args:
-            pdf_path: Path to PDF file
-            dpi: Resolution for OCR conversion
-            lang: Language for OCR
-            min_text_threshold: Minimum characters to consider traditional extraction successful
-            
-        Returns:
-            Extracted text
-        """
-        print(f"📋 Extracting text from: {pdf_path}")
-        
-        # First, try traditional extraction
-        print("🔤 Trying traditional text extraction...")
-        traditional_text = self.extract_text_traditional(pdf_path)
-        
-        if len(traditional_text) >= min_text_threshold:
-            print(f"✅ Traditional extraction successful ({len(traditional_text)} chars)")
-            return traditional_text
-        else:
-            print(f"⚠️  Traditional extraction insufficient ({len(traditional_text)} chars)")
-            print("🔍 Falling back to OCR...")
-            
-            ocr_text = self.extract_text_ocr(pdf_path, dpi=dpi, lang=lang)
-            
-            if ocr_text:
-                print(f"✅ OCR extraction successful ({len(ocr_text)} chars)")
-                return ocr_text
-            else:
-                print("❌ OCR extraction failed")
-                return traditional_text  # Return whatever we got
     
     def extract_to_file(self, pdf_path: Path, output_path: Optional[Path] = None,
-                       method: str = 'hybrid', **kwargs) -> Path:
+                       method: str = 'ocr', **kwargs) -> Path:
         """
         Extract text and save to file.
         
         Args:
             pdf_path: Path to PDF file
             output_path: Output file path (auto-generate if None)
-            method: 'traditional', 'ocr', or 'hybrid'
+            method: 'traditional' or 'ocr'
             **kwargs: Additional arguments for extraction methods
             
         Returns:
@@ -188,8 +153,6 @@ class PDFOCRExtractor:
             text = self.extract_text_traditional(pdf_path)
         elif method == 'ocr':
             text = self.extract_text_ocr(pdf_path, **kwargs)
-        elif method == 'hybrid':
-            text = self.extract_text_hybrid(pdf_path, **kwargs)
         else:
             raise ValueError(f"Unknown method: {method}")
         
@@ -201,14 +164,14 @@ class PDFOCRExtractor:
         return output_path
     
     def extract_to_json(self, pdf_path: Path, output_path: Optional[Path] = None,
-                       method: str = 'hybrid', **kwargs) -> Path:
+                       method: str = 'ocr', **kwargs) -> Path:
         """
         Extract text and save as JSON with metadata.
         
         Args:
             pdf_path: Path to PDF file
             output_path: Output JSON file path (auto-generate if None)
-            method: 'traditional', 'ocr', or 'hybrid'
+            method: 'traditional' or 'ocr'
             **kwargs: Additional arguments for extraction methods
             
         Returns:
@@ -224,8 +187,6 @@ class PDFOCRExtractor:
             text = self.extract_text_traditional(pdf_path)
         elif method == 'ocr':
             text = self.extract_text_ocr(pdf_path, **kwargs)
-        elif method == 'hybrid':
-            text = self.extract_text_hybrid(pdf_path, **kwargs)
         else:
             raise ValueError(f"Unknown method: {method}")
         
@@ -256,8 +217,8 @@ def main():
     parser = argparse.ArgumentParser(description='Extract text from PDF using OCR')
     parser.add_argument('pdf_file', help='Path to PDF file')
     parser.add_argument('-o', '--output', help='Output file path')
-    parser.add_argument('-m', '--method', choices=['traditional', 'ocr', 'hybrid'], 
-                       default='hybrid', help='Extraction method (default: hybrid)')
+    parser.add_argument('-m', '--method', choices=['traditional', 'ocr'], 
+                       default='ocr', help='Extraction method (default: ocr)')
     parser.add_argument('-d', '--dpi', type=int, default=300, 
                        help='DPI for OCR conversion (default: 300)')
     parser.add_argument('-l', '--lang', default='eng', 
