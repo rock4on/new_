@@ -32,6 +32,15 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 
+# Import required dependencies first
+try:
+    import openai
+    from pydantic import BaseModel, Field
+except ImportError as e:
+    print(f"❌ Missing required dependency: {e}")
+    print("💡 Install with: pip install openai pydantic")
+    sys.exit(1)
+
 # Import the existing OCR extractor
 from pdf_ocr_extractor import PDFOCRExtractor
 
@@ -68,14 +77,6 @@ class LeaseInformation(BaseModel):
         description="Building Type (i.e., Office vs. Warehouse)"
     )
 
-try:
-    import openai
-    from pydantic import BaseModel, Field
-except ImportError as e:
-    print(f"❌ Missing required dependency: {e}")
-    print("💡 Install with: pip install openai pydantic")
-    sys.exit(1)
-
 
 class LeaseDocumentProcessor:
     """Extract structured lease information from PDF documents"""
@@ -89,8 +90,8 @@ class LeaseDocumentProcessor:
             tesseract_cmd: Path to tesseract executable
             max_workers: Maximum number of worker threads for parallel processing
         """
-        # Initialize OCR extractor
-        self.ocr_extractor = PDFOCRExtractor(tesseract_cmd=tesseract_cmd)
+        # Initialize OCR extractor with multithreading
+        self.ocr_extractor = PDFOCRExtractor(tesseract_cmd=tesseract_cmd, max_workers=max_workers)
         
         # Initialize OpenAI client
         self.client = openai.OpenAI(
@@ -153,10 +154,32 @@ class LeaseDocumentProcessor:
             lease_info = response.choices[0].message.parsed
             
             # Convert Pydantic model to dictionary
-            return lease_info.model_dump()
+            extracted_data = lease_info.model_dump()
+            
+            # Check if AI extracted any meaningful data
+            has_data = any(value is not None and str(value).strip() for value in extracted_data.values())
+            
+            if not has_data:
+                print("⚠️  AI extraction completed but no lease information was found in the document")
+                print("📄 This may indicate:")
+                print("   - Document doesn't contain lease information")
+                print("   - OCR quality is poor") 
+                print("   - Document format is not recognized")
+            else:
+                # Print what was successfully extracted
+                extracted_fields = [field for field, value in extracted_data.items() 
+                                  if value is not None and str(value).strip()]
+                print(f"✅ AI successfully extracted: {', '.join(extracted_fields)}")
+            
+            return extracted_data
             
         except Exception as e:
-            print(f"❌ AI extraction failed: {e}")
+            print(f"❌ AI extraction failed with error: {e}")
+            print("📄 This could be due to:")
+            print("   - OpenAI API issues")
+            print("   - Invalid API key")
+            print("   - Network connectivity problems")
+            print("   - Text format issues")
             return {field: None for field in self.lease_fields.keys()}
     
     
@@ -201,6 +224,23 @@ class LeaseDocumentProcessor:
             print("🤖 Using AI for lease information extraction...")
         lease_info = self.extract_lease_info_ai(text)
         ai_time = time.time() - ai_start_time
+        
+        # Report missing fields
+        missing_fields = [field for field, value in lease_info.items() 
+                         if value is None or not str(value).strip()]
+        if missing_fields:
+            with self.lock:
+                print(f"⚠️  Missing or empty fields: {', '.join(missing_fields)}")
+        
+        # Report successfully extracted fields
+        extracted_fields = [field for field, value in lease_info.items() 
+                           if value is not None and str(value).strip()]
+        if extracted_fields:
+            with self.lock:
+                print(f"✅ Successfully extracted fields: {', '.join(extracted_fields)}")
+        else:
+            with self.lock:
+                print("❌ No lease information could be extracted from this document")
         
         total_time = time.time() - start_time
         

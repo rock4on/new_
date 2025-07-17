@@ -13,6 +13,8 @@ from typing import Optional, List
 import argparse
 import json
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 #
 try:
     import pytesseract
@@ -30,12 +32,13 @@ except ImportError as e:
 class PDFOCRExtractor:
     """Extract text from PDFs using OCR when needed"""
     
-    def __init__(self, tesseract_cmd: Optional[str] = None):
+    def __init__(self, tesseract_cmd: Optional[str] = None, max_workers: int = 4):
         """
         Initialize the PDF OCR extractor.
         
         Args:
             tesseract_cmd: Path to tesseract executable (auto-detect if None)
+            max_workers: Maximum number of worker threads for OCR processing
         """
         # Set tesseract command path if provided
         if tesseract_cmd:
@@ -51,6 +54,10 @@ class PDFOCRExtractor:
             print("   macOS: brew install tesseract")
             print("   Windows: Download from https://github.com/UB-Mannheim/tesseract/wiki")
             sys.exit(1)
+        
+        # Threading settings
+        self.max_workers = max_workers
+        self.lock = threading.Lock()
     
     def extract_text_traditional(self, pdf_path: Path) -> str:
         """
@@ -80,9 +87,40 @@ class PDFOCRExtractor:
             print(f"❌ Traditional extraction failed: {e}")
             return ""
     
+    def _process_page_ocr(self, page_data: tuple) -> Optional[str]:
+        """
+        Process a single page with OCR (thread-safe).
+        
+        Args:
+            page_data: Tuple of (page_index, image, lang)
+            
+        Returns:
+            Extracted text for the page or None if failed
+        """
+        page_index, image, lang = page_data
+        try:
+            with self.lock:
+                print(f"  📖 Processing page {page_index + 1}...")
+            
+            # Perform OCR on the image
+            page_text = pytesseract.image_to_string(
+                image,
+                lang=lang,
+                config='--psm 1 --oem 3'  # Page segmentation mode 1, OCR engine mode 3
+            )
+            
+            if page_text and page_text.strip():
+                return f"=== Page {page_index + 1} ===\n{page_text.strip()}"
+            
+        except Exception as e:
+            with self.lock:
+                print(f"❌ OCR failed for page {page_index + 1}: {e}")
+        
+        return None
+
     def extract_text_ocr(self, pdf_path: Path, dpi: int = 300, lang: str = 'eng') -> str:
         """
-        Extract text using OCR on PDF pages converted to images.
+        Extract text using OCR on PDF pages converted to images with multithreading.
         
         Args:
             pdf_path: Path to PDF file
@@ -100,29 +138,38 @@ class PDFOCRExtractor:
                 pdf_path,
                 dpi=dpi,
                 fmt='PNG',
-                thread_count=4  # Use multiple threads for faster conversion
+                thread_count=min(self.max_workers, 4)  # Use multiple threads for faster conversion
             )
             
-            print(f"📄 Processing {len(images)} pages with OCR...")
+            print(f"📄 Processing {len(images)} pages with OCR using {self.max_workers} threads...")
             
+            text_results = {}
+            
+            # Process pages in parallel
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                # Submit all OCR tasks
+                page_data = [(i, image, lang) for i, image in enumerate(images)]
+                future_to_page = {
+                    executor.submit(self._process_page_ocr, data): data[0]
+                    for data in page_data
+                }
+                
+                # Collect results
+                for future in as_completed(future_to_page):
+                    page_index = future_to_page[future]
+                    try:
+                        result = future.result()
+                        if result:
+                            text_results[page_index] = result
+                    except Exception as e:
+                        with self.lock:
+                            print(f"❌ Failed to process page {page_index + 1}: {e}")
+            
+            # Sort results by page index and combine
             text_chunks = []
-            for i, image in enumerate(images):
-                try:
-                    print(f"  📖 Processing page {i+1}/{len(images)}...")
-                    
-                    # Perform OCR on the image
-                    page_text = pytesseract.image_to_string(
-                        image,
-                        lang=lang,
-                        config='--psm 1 --oem 3'  # Page segmentation mode 1, OCR engine mode 3
-                    )
-                    
-                    if page_text and page_text.strip():
-                        text_chunks.append(f"=== Page {i+1} ===\n{page_text.strip()}")
-                    
-                except Exception as e:
-                    print(f"❌ OCR failed for page {i+1}: {e}")
-                    continue
+            for i in range(len(images)):
+                if i in text_results:
+                    text_chunks.append(text_results[i])
             
             return "\n\n".join(text_chunks) if text_chunks else ""
             
