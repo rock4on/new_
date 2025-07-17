@@ -5,10 +5,17 @@ Lease Document Processor
 Processes PDF lease documents using OCR and AI to extract structured lease information.
 Builds upon the existing PDF OCR extractor to provide lease-specific data extraction.
 
+Features:
+- Multithreaded processing for improved performance
+- Detailed timing measurements for each document
+- Excel output with multiple sheets (Lease Information, Processing Times, Summary)
+- Thread-safe operations with configurable worker threads
+
 Default behavior:
 - Processes all PDF files in 'leases' folder
-- Outputs results to 'lease_results.csv'
+- Outputs results to 'lease_results.xlsx'
 - Uses OCR for text extraction and AI for information extraction
+- Uses 4 worker threads for parallel processing
 """
 
 import os
@@ -20,6 +27,10 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 import csv
+import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import pandas as pd
 
 # Import the existing OCR extractor
 from pdf_ocr_extractor import PDFOCRExtractor
@@ -69,13 +80,14 @@ except ImportError as e:
 class LeaseDocumentProcessor:
     """Extract structured lease information from PDF documents"""
     
-    def __init__(self, openai_api_key: Optional[str] = None, tesseract_cmd: Optional[str] = None):
+    def __init__(self, openai_api_key: Optional[str] = None, tesseract_cmd: Optional[str] = None, max_workers: int = 4):
         """
         Initialize the lease document processor.
         
         Args:
             openai_api_key: OpenAI API key (or from environment)
             tesseract_cmd: Path to tesseract executable
+            max_workers: Maximum number of worker threads for parallel processing
         """
         # Initialize OCR extractor
         self.ocr_extractor = PDFOCRExtractor(tesseract_cmd=tesseract_cmd)
@@ -88,6 +100,10 @@ class LeaseDocumentProcessor:
         # Check if API key is available
         if not (openai_api_key or os.getenv('OPENAI_API_KEY')):
             raise ValueError("OpenAI API key is required. Set OPENAI_API_KEY environment variable or pass openai_api_key parameter.")
+        
+        # Threading settings
+        self.max_workers = max_workers
+        self.lock = threading.Lock()
         
         # Define the lease information fields we want to extract
         self.lease_fields = {
@@ -155,9 +171,13 @@ class LeaseDocumentProcessor:
         Returns:
             Dictionary with extracted lease information
         """
-        print(f"📄 Processing lease document: {pdf_path}")
+        start_time = time.time()
+        
+        with self.lock:
+            print(f"📄 Processing lease document: {pdf_path}")
         
         # Extract text using OCR
+        ocr_start_time = time.time()
         if ocr_method == 'traditional':
             text = self.ocr_extractor.extract_text_traditional(pdf_path)
         elif ocr_method == 'ocr':
@@ -165,15 +185,24 @@ class LeaseDocumentProcessor:
         else:  # default to ocr
             text = self.ocr_extractor.extract_text_ocr(pdf_path)
         
+        ocr_time = time.time() - ocr_start_time
+        
         if not text.strip():
-            print("❌ No text extracted from PDF")
+            with self.lock:
+                print("❌ No text extracted from PDF")
             return {field: None for field in self.lease_fields.keys()}
         
-        print(f"📝 Extracted {len(text)} characters of text")
+        with self.lock:
+            print(f"📝 Extracted {len(text)} characters of text in {ocr_time:.2f}s")
         
         # Extract lease information using AI
-        print("🤖 Using AI for lease information extraction...")
+        ai_start_time = time.time()
+        with self.lock:
+            print("🤖 Using AI for lease information extraction...")
         lease_info = self.extract_lease_info_ai(text)
+        ai_time = time.time() - ai_start_time
+        
+        total_time = time.time() - start_time
         
         # Add metadata
         lease_info['_metadata'] = {
@@ -181,15 +210,50 @@ class LeaseDocumentProcessor:
             'processing_method': 'ai',
             'ocr_method': ocr_method,
             'text_length': len(text),
-            'processed_at': datetime.now().isoformat()
+            'processed_at': datetime.now().isoformat(),
+            'ocr_time_seconds': round(ocr_time, 2),
+            'ai_time_seconds': round(ai_time, 2),
+            'total_time_seconds': round(total_time, 2)
         }
+        
+        with self.lock:
+            print(f"⏱️  Total processing time: {total_time:.2f}s (OCR: {ocr_time:.2f}s, AI: {ai_time:.2f}s)")
         
         return lease_info
     
+    def process_single_pdf_with_index(self, pdf_path: Path, file_index: int, ocr_method: str) -> Dict[str, Any]:
+        """
+        Process a single PDF file with thread-safe operations.
+        
+        Args:
+            pdf_path: Path to PDF file
+            file_index: Index of the file in the batch
+            ocr_method: OCR method to use
+            
+        Returns:
+            Dictionary with extracted lease information
+        """
+        try:
+            lease_info = self.process_pdf(pdf_path, ocr_method=ocr_method)
+            lease_info['_metadata']['file_index'] = file_index
+            return lease_info
+        except Exception as e:
+            with self.lock:
+                print(f"❌ Failed to process {pdf_path.name}: {e}")
+            # Add error record
+            error_record = {field: None for field in self.lease_fields.keys()}
+            error_record['_metadata'] = {
+                'source_file': str(pdf_path),
+                'error': str(e),
+                'file_index': file_index,
+                'processed_at': datetime.now().isoformat()
+            }
+            return error_record
+
     def process_directory(self, directory_path: Path, output_path: Optional[Path] = None, 
                          ocr_method: str = 'ocr') -> List[Dict[str, Any]]:
         """
-        Process all PDF files in a directory.
+        Process all PDF files in a directory using multithreading.
         
         Args:
             directory_path: Path to directory containing PDF files
@@ -206,27 +270,41 @@ class LeaseDocumentProcessor:
             return []
         
         print(f"📁 Found {len(pdf_files)} PDF files to process")
+        print(f"⚡ Using {self.max_workers} worker threads for parallel processing")
         
+        start_time = time.time()
         results = []
-        for i, pdf_path in enumerate(pdf_files, 1):
-            print(f"\n🔄 Processing file {i}/{len(pdf_files)}: {pdf_path.name}")
+        
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            # Submit all tasks
+            future_to_pdf = {
+                executor.submit(self.process_single_pdf_with_index, pdf_path, i, ocr_method): (pdf_path, i)
+                for i, pdf_path in enumerate(pdf_files, 1)
+            }
             
-            try:
-                lease_info = self.process_pdf(pdf_path, ocr_method=ocr_method)
-                lease_info['_metadata']['file_index'] = i
-                results.append(lease_info)
-                
-            except Exception as e:
-                print(f"❌ Failed to process {pdf_path.name}: {e}")
-                # Add error record
-                error_record = {field: None for field in self.lease_fields.keys()}
-                error_record['_metadata'] = {
-                    'source_file': str(pdf_path),
-                    'error': str(e),
-                    'file_index': i,
-                    'processed_at': datetime.now().isoformat()
-                }
-                results.append(error_record)
+            # Process completed tasks
+            for future in as_completed(future_to_pdf):
+                pdf_path, file_index = future_to_pdf[future]
+                try:
+                    result = future.result()
+                    results.append(result)
+                    with self.lock:
+                        print(f"✅ Completed {len(results)}/{len(pdf_files)}: {pdf_path.name}")
+                except Exception as e:
+                    with self.lock:
+                        print(f"❌ Error processing {pdf_path.name}: {e}")
+        
+        # Sort results by file index to maintain order
+        results.sort(key=lambda x: x['_metadata'].get('file_index', 0))
+        
+        total_time = time.time() - start_time
+        avg_time = total_time / len(pdf_files) if pdf_files else 0
+        
+        print(f"\n📊 Processing Summary:")
+        print(f"   Total files: {len(pdf_files)}")
+        print(f"   Total time: {total_time:.2f}s")
+        print(f"   Average time per file: {avg_time:.2f}s")
+        print(f"   Worker threads: {self.max_workers}")
         
         # Save results if output path provided
         if output_path:
@@ -248,8 +326,82 @@ class LeaseDocumentProcessor:
                 json.dump(results, f, indent=2, ensure_ascii=False)
             print(f"💾 Results saved to JSON: {output_path}")
             
+        elif output_path.suffix.lower() in ['.xlsx', '.xls']:
+            # Save as Excel with multiple sheets
+            if not results:
+                print("❌ No results to save")
+                return
+            
+            # Prepare data for the main sheet
+            main_data = []
+            timing_data = []
+            
+            for result in results:
+                # Main lease information
+                row = {field: result.get(field) for field in self.lease_fields.keys()}
+                if '_metadata' in result:
+                    row.update({
+                        'source_file': result['_metadata'].get('source_file', ''),
+                        'processing_method': result['_metadata'].get('processing_method', ''),
+                        'ocr_method': result['_metadata'].get('ocr_method', ''),
+                        'processed_at': result['_metadata'].get('processed_at', ''),
+                        'file_index': result['_metadata'].get('file_index', '')
+                    })
+                main_data.append(row)
+                
+                # Timing information
+                if '_metadata' in result:
+                    timing_row = {
+                        'file_index': result['_metadata'].get('file_index', ''),
+                        'source_file': result['_metadata'].get('source_file', ''),
+                        'ocr_time_seconds': result['_metadata'].get('ocr_time_seconds', ''),
+                        'ai_time_seconds': result['_metadata'].get('ai_time_seconds', ''),
+                        'total_time_seconds': result['_metadata'].get('total_time_seconds', ''),
+                        'text_length': result['_metadata'].get('text_length', ''),
+                        'processed_at': result['_metadata'].get('processed_at', '')
+                    }
+                    timing_data.append(timing_row)
+            
+            # Create DataFrames
+            main_df = pd.DataFrame(main_data)
+            timing_df = pd.DataFrame(timing_data)
+            
+            # Create Excel writer
+            with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+                # Main lease information sheet
+                main_df.to_excel(writer, sheet_name='Lease Information', index=False)
+                
+                # Timing analysis sheet
+                if timing_data:
+                    timing_df.to_excel(writer, sheet_name='Processing Times', index=False)
+                
+                # Summary sheet
+                summary_data = {
+                    'Metric': [
+                        'Total Files Processed',
+                        'Average OCR Time (seconds)',
+                        'Average AI Time (seconds)',
+                        'Average Total Time (seconds)',
+                        'Total Processing Time (seconds)',
+                        'Files with Errors'
+                    ],
+                    'Value': [
+                        len(results),
+                        timing_df['ocr_time_seconds'].mean() if not timing_df.empty else 0,
+                        timing_df['ai_time_seconds'].mean() if not timing_df.empty else 0,
+                        timing_df['total_time_seconds'].mean() if not timing_df.empty else 0,
+                        timing_df['total_time_seconds'].sum() if not timing_df.empty else 0,
+                        sum(1 for r in results if r.get('_metadata', {}).get('error'))
+                    ]
+                }
+                summary_df = pd.DataFrame(summary_data)
+                summary_df.to_excel(writer, sheet_name='Summary', index=False)
+            
+            print(f"💾 Results saved to Excel: {output_path}")
+            print(f"📊 Created 3 sheets: Lease Information, Processing Times, Summary")
+            
         elif output_path.suffix.lower() == '.csv':
-            # Save as CSV
+            # Save as CSV (legacy support)
             if not results:
                 print("❌ No results to save")
                 return
@@ -299,11 +451,12 @@ def main():
     """Command line interface"""
     parser = argparse.ArgumentParser(description='Extract structured lease information from PDF documents')
     parser.add_argument('input', nargs='?', default='leases', help='Path to PDF file or directory containing PDF files (default: leases)')
-    parser.add_argument('-o', '--output', default='lease_results.csv', help='Output file path (JSON, CSV, or TXT) (default: lease_results.csv)')
+    parser.add_argument('-o', '--output', default='lease_results.xlsx', help='Output file path (XLSX, JSON, CSV, or TXT) (default: lease_results.xlsx)')
     parser.add_argument('-m', '--ocr-method', choices=['traditional', 'ocr'], 
                        default='ocr', help='OCR method to use (default: ocr)')
     parser.add_argument('--openai-key', help='OpenAI API key (or set OPENAI_API_KEY env var)')
     parser.add_argument('-t', '--tesseract', help='Path to tesseract executable')
+    parser.add_argument('-w', '--workers', type=int, default=4, help='Number of worker threads for parallel processing (default: 4)')
     
     args = parser.parse_args()
     
@@ -319,7 +472,8 @@ def main():
     try:
         processor = LeaseDocumentProcessor(
             openai_api_key=args.openai_key,
-            tesseract_cmd=args.tesseract
+            tesseract_cmd=args.tesseract,
+            max_workers=args.workers
         )
     except Exception as e:
         print(f"❌ Failed to initialize processor: {e}")
