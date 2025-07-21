@@ -61,8 +61,8 @@ def create_electricity_documents_index(
         
         # Define the index fields
         fields = [
-            SimpleField("id", "Edm.String", key=True),
-            SearchableField("content", "Edm.String"),
+            SimpleField(name="id", type="Edm.String", key=True),
+            SearchableField(name="content", type="Edm.String"),
             SearchField(
                 name="embedding",
                 type="Collection(Edm.Single)",
@@ -70,20 +70,20 @@ def create_electricity_documents_index(
                 vector_search_dimensions=1536,
                 vector_search_profile_name="ada-vector-profile"
             ),
-            SimpleField("filename", "Edm.String", filterable=True, sortable=True),
-            SimpleField("page_no", "Edm.Int32", filterable=True, sortable=True, facetable=True),
-            SimpleField("doc_type", "Edm.String", filterable=True, sortable=True, facetable=True),
-            SimpleField("client_name", "Edm.String", filterable=True, sortable=True, facetable=True),
-            SimpleField("language", "Edm.String", filterable=True, facetable=True),
-            SimpleField("isTranslated", "Edm.String", filterable=True, facetable=True),
-            SearchableField("description", "Edm.String", filterable=True),
-            SearchableField("location", "Edm.String", filterable=True),
-            SimpleField("lease_start_date", "Edm.String", filterable=True, sortable=True, facetable=True),
-            SimpleField("lease_end_date", "Edm.String", filterable=True, sortable=True, facetable=True),
-            SimpleField("building_area", "Edm.String", filterable=True, sortable=True, facetable=True),
-            SimpleField("area_unit", "Edm.String", filterable=True, facetable=True),
-            SimpleField("building_type", "Edm.String", filterable=True, facetable=True),
-            SimpleField("processed_at", "Edm.DateTimeOffset", filterable=True, sortable=True),
+            SimpleField(name="filename", type="Edm.String", filterable=True, sortable=True),
+            SimpleField(name="page_no", type="Edm.Int32", filterable=True, sortable=True, facetable=True),
+            SimpleField(name="doc_type", type="Edm.String", filterable=True, sortable=True, facetable=True),
+            SimpleField(name="client_name", type="Edm.String", filterable=True, sortable=True, facetable=True),
+            SimpleField(name="language", type="Edm.String", filterable=True, facetable=True),
+            SimpleField(name="isTranslated", type="Edm.String", filterable=True, facetable=True),
+            SearchableField(name="description", type="Edm.String", filterable=True),
+            SearchableField(name="location", type="Edm.String", filterable=True),
+            SimpleField(name="lease_start_date", type="Edm.String", filterable=True, sortable=True, facetable=True),
+            SimpleField(name="lease_end_date", type="Edm.String", filterable=True, sortable=True, facetable=True),
+            SimpleField(name="building_area", type="Edm.String", filterable=True, sortable=True, facetable=True),
+            SimpleField(name="area_unit", type="Edm.String", filterable=True, facetable=True),
+            SimpleField(name="building_type", type="Edm.String", filterable=True, facetable=True),
+            SimpleField(name="processed_at", type="Edm.DateTimeOffset", filterable=True, sortable=True),
         ]
         
         # Configure vector search
