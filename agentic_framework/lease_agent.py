@@ -198,27 +198,78 @@ class LocationMatchingTool(BaseTool):
         try:
             # Search for documents with matching location
             search_results = self.search_client.search(
-                search_text="*",
-                filter=f"search.ismatch('{location}', 'location')",
-                select=["id", "filename", "location", "client_name", "doc_type", "processed_at"],
-                top=10
+                search_text=location,
+                select=["id", "filename", "location", "client_name", "lease_start_date", 
+                       "lease_end_date", "building_area", "area_unit", "building_type", "processed_at"],
+                top=20
             )
             
             matches = []
             for result in search_results:
                 matches.append({
-                    "id": result.get("id"),
                     "filename": result.get("filename"),
                     "location": result.get("location"),
                     "client_name": result.get("client_name"),
-                    "doc_type": result.get("doc_type"),
-                    "processed_at": result.get("processed_at")
+                    "lease_start_date": result.get("lease_start_date"),
+                    "lease_end_date": result.get("lease_end_date"),
+                    "building_area": result.get("building_area"),
+                    "area_unit": result.get("area_unit"),
+                    "building_type": result.get("building_type"),
+                    "score": result.get("@search.score", 0)
                 })
             
             if matches:
-                return f"Found {len(matches)} documents matching location '{location}': {json.dumps(matches, indent=2)}"
+                # Analyze the results
+                analysis = f"Found {len(matches)} lease documents related to '{location}':\n\n"
+                
+                # Group by client
+                clients = {}
+                total_area = 0
+                building_types = {}
+                
+                for match in matches:
+                    client = match.get("client_name", "Unknown")
+                    if client not in clients:
+                        clients[client] = []
+                    clients[client].append(match)
+                    
+                    # Track building area
+                    area = match.get("building_area")
+                    if area and str(area).replace(".", "").replace(",", "").isdigit():
+                        total_area += float(str(area).replace(",", ""))
+                    
+                    # Track building types
+                    btype = match.get("building_type")
+                    if btype:
+                        building_types[btype] = building_types.get(btype, 0) + 1
+                
+                # Detailed analysis
+                analysis += "📊 SUMMARY:\n"
+                analysis += f"• Total documents: {len(matches)}\n"
+                analysis += f"• Unique clients: {len(clients)}\n"
+                if total_area > 0:
+                    analysis += f"• Total building area: {total_area:,.0f} sq ft\n"
+                if building_types:
+                    analysis += f"• Building types: {', '.join([f'{k} ({v})' for k, v in building_types.items()])}\n"
+                
+                analysis += f"\n📋 DETAILED RESULTS:\n"
+                
+                for client, client_matches in clients.items():
+                    analysis += f"\n🏢 Client: {client}\n"
+                    for match in client_matches[:5]:  # Limit to 5 per client
+                        analysis += f"  • {match.get('filename', 'Unknown file')}\n"
+                        analysis += f"    Location: {match.get('location', 'Not specified')}\n"
+                        if match.get('lease_start_date'):
+                            analysis += f"    Lease: {match.get('lease_start_date')} to {match.get('lease_end_date', 'Unknown')}\n"
+                        if match.get('building_area'):
+                            analysis += f"    Area: {match.get('building_area')} {match.get('area_unit', '')}\n"
+                        if match.get('building_type'):
+                            analysis += f"    Type: {match.get('building_type')}\n"
+                        analysis += "\n"
+                
+                return analysis
             else:
-                return f"No documents found matching location '{location}'"
+                return f"No lease documents found for location '{location}'. Try searching with different keywords or check if documents have been uploaded to the system."
                 
         except Exception as e:
             return f"Error searching for location: {str(e)}"
@@ -264,7 +315,7 @@ class VectorSearchTool(BaseTool):
             # Parse input JSON
             data = json.loads(input_data)
             query = data.get('query', '')
-            fields = data.get('fields', [])
+            fields = data.get('fields', ['location', 'lease_start_date', 'lease_end_date', 'building_area', 'building_type'])
             
             if not query:
                 return "Error: No search query provided"
@@ -275,39 +326,296 @@ class VectorSearchTool(BaseTool):
                 return "Error: Failed to generate query embedding"
             
             # Perform vector search
-            vector_query = VectorizedQuery(vector=query_embedding, k_nearest_neighbors=5, fields="embedding")
+            vector_query = VectorizedQuery(vector=query_embedding, k_nearest_neighbors=10, fields="embedding")
             
             search_results = self.search_client.search(
                 search_text=query,
                 vector_queries=[vector_query],
                 select=["id", "filename", "content", "location", "lease_start_date", "lease_end_date", 
                        "building_area", "area_unit", "building_type", "client_name"],
-                top=5
+                top=15
             )
             
             results = []
             for result in search_results:
                 doc_data = {
-                    "id": result.get("id"),
                     "filename": result.get("filename"),
-                    "score": result.get("@search.score", 0)
+                    "client_name": result.get("client_name"),
+                    "score": result.get("@search.score", 0),
+                    "content_preview": (result.get("content", "")[:200] + "...") if result.get("content") else ""
                 }
                 
-                # Extract requested fields
-                for field in fields:
+                # Extract all relevant fields
+                for field in ["location", "lease_start_date", "lease_end_date", "building_area", "area_unit", "building_type"]:
                     doc_data[field] = result.get(field, "")
                 
                 results.append(doc_data)
             
             if results:
-                return f"Found {len(results)} relevant documents: {json.dumps(results, indent=2)}"
+                # Provide comprehensive analysis
+                analysis = f"🔍 SEARCH RESULTS for '{query}'\n"
+                analysis += f"Found {len(results)} relevant documents:\n\n"
+                
+                # Analyze the data
+                clients = set()
+                locations = set()
+                building_types = {}
+                total_area = 0
+                lease_dates = []
+                
+                for doc in results:
+                    if doc.get("client_name"):
+                        clients.add(doc["client_name"])
+                    if doc.get("location"):
+                        locations.add(doc["location"])
+                    if doc.get("building_type"):
+                        btype = doc["building_type"]
+                        building_types[btype] = building_types.get(btype, 0) + 1
+                    
+                    # Parse area
+                    area = doc.get("building_area")
+                    if area and str(area).replace(".", "").replace(",", "").isdigit():
+                        total_area += float(str(area).replace(",", ""))
+                    
+                    # Collect lease dates
+                    if doc.get("lease_start_date") and doc.get("lease_end_date"):
+                        lease_dates.append((doc["lease_start_date"], doc["lease_end_date"]))
+                
+                # Summary
+                analysis += "📊 SUMMARY:\n"
+                analysis += f"• {len(clients)} unique clients\n"
+                analysis += f"• {len(locations)} unique locations\n"
+                if building_types:
+                    analysis += f"• Building types: {', '.join([f'{k} ({v})' for k, v in building_types.items()])}\n"
+                if total_area > 0:
+                    avg_area = total_area / len([r for r in results if r.get("building_area")])
+                    analysis += f"• Total area: {total_area:,.0f} sq ft (avg: {avg_area:,.0f} sq ft)\n"
+                
+                # Top results with detailed info
+                analysis += f"\n📋 TOP MATCHING DOCUMENTS:\n"
+                for i, doc in enumerate(results[:8], 1):
+                    analysis += f"\n{i}. {doc.get('filename', 'Unknown file')} (Score: {doc['score']:.2f})\n"
+                    analysis += f"   Client: {doc.get('client_name', 'Unknown')}\n"
+                    analysis += f"   Location: {doc.get('location', 'Not specified')}\n"
+                    if doc.get('lease_start_date'):
+                        analysis += f"   Lease Period: {doc['lease_start_date']} to {doc.get('lease_end_date', 'Unknown')}\n"
+                    if doc.get('building_area'):
+                        analysis += f"   Area: {doc['building_area']} {doc.get('area_unit', '')}\n"
+                    if doc.get('building_type'):
+                        analysis += f"   Type: {doc['building_type']}\n"
+                
+                # Extract specific requested fields if provided
+                if fields and any(f != "" for f in fields):
+                    analysis += f"\n🎯 REQUESTED FIELDS SUMMARY:\n"
+                    for field in fields:
+                        field_values = [doc.get(field) for doc in results if doc.get(field)]
+                        if field_values:
+                            unique_values = list(set(field_values))
+                            analysis += f"• {field}: {len(unique_values)} unique values\n"
+                            if len(unique_values) <= 5:
+                                analysis += f"  Values: {', '.join(unique_values)}\n"
+                            else:
+                                analysis += f"  Top values: {', '.join(unique_values[:5])}...\n"
+                
+                return analysis
             else:
-                return f"No documents found for query '{query}'"
+                return f"No documents found matching '{query}'. Try different keywords or check if relevant documents have been uploaded."
                 
         except json.JSONDecodeError:
-            return "Error: Invalid JSON input format"
+            return "Error: Invalid JSON input format. Please provide JSON with 'query' and optional 'fields' array."
         except Exception as e:
             return f"Error performing vector search: {str(e)}"
+
+
+class LeaseAnalysisTool(BaseTool):
+    """Tool for comprehensive lease portfolio analysis"""
+    
+    name: str = "lease_analysis"
+    description: str = "Performs comprehensive analysis of the entire lease portfolio. Input can be 'all' for full analysis or specific criteria like 'expiring_soon', 'by_client', 'by_location', etc."
+    search_client: Any = Field(default=None, exclude=True)
+    
+    def __init__(self, search_client: SearchClient, **kwargs):
+        super().__init__(**kwargs)
+        object.__setattr__(self, 'search_client', search_client)
+    
+    def _run(self, analysis_type: str = "all") -> str:
+        """Perform comprehensive lease analysis"""
+        try:
+            print(f"   📊 Performing lease analysis: {analysis_type}")
+            
+            # Get all documents
+            search_results = self.search_client.search(
+                search_text="*",
+                select=["filename", "location", "client_name", "lease_start_date", 
+                       "lease_end_date", "building_area", "area_unit", "building_type", 
+                       "processed_at"],
+                top=1000  # Get more documents for analysis
+            )
+            
+            documents = []
+            for result in search_results:
+                documents.append({
+                    "filename": result.get("filename"),
+                    "location": result.get("location"),
+                    "client_name": result.get("client_name"),
+                    "lease_start_date": result.get("lease_start_date"),
+                    "lease_end_date": result.get("lease_end_date"),
+                    "building_area": result.get("building_area"),
+                    "area_unit": result.get("area_unit"),
+                    "building_type": result.get("building_type"),
+                    "processed_at": result.get("processed_at")
+                })
+            
+            if not documents:
+                return "No lease documents found in the system. Please upload lease documents first."
+            
+            # Comprehensive analysis
+            analysis = f"🏢 COMPREHENSIVE LEASE PORTFOLIO ANALYSIS\n"
+            analysis += f"{'='*60}\n\n"
+            
+            # Basic statistics
+            total_docs = len(documents)
+            clients = set()
+            locations = set()
+            building_types = {}
+            total_area = 0
+            area_count = 0
+            lease_dates = []
+            
+            from datetime import datetime, timedelta
+            today = datetime.now()
+            expiring_soon = []
+            expired = []
+            
+            for doc in documents:
+                # Client analysis
+                if doc.get("client_name"):
+                    clients.add(doc["client_name"])
+                
+                # Location analysis
+                if doc.get("location"):
+                    locations.add(doc["location"])
+                
+                # Building type analysis
+                if doc.get("building_type"):
+                    btype = doc["building_type"]
+                    building_types[btype] = building_types.get(btype, 0) + 1
+                
+                # Area analysis
+                area = doc.get("building_area")
+                if area and str(area).replace(".", "").replace(",", "").isdigit():
+                    total_area += float(str(area).replace(",", ""))
+                    area_count += 1
+                
+                # Date analysis
+                if doc.get("lease_end_date"):
+                    try:
+                        # Try to parse different date formats
+                        end_date_str = doc["lease_end_date"]
+                        end_date = None
+                        
+                        for fmt in ["%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y", "%B %d, %Y"]:
+                            try:
+                                end_date = datetime.strptime(end_date_str, fmt)
+                                break
+                            except ValueError:
+                                continue
+                        
+                        if end_date:
+                            days_until_expiry = (end_date - today).days
+                            if days_until_expiry < 0:
+                                expired.append((doc, abs(days_until_expiry)))
+                            elif days_until_expiry <= 365:  # Expiring within a year
+                                expiring_soon.append((doc, days_until_expiry))
+                    except:
+                        pass
+            
+            # Portfolio Overview
+            analysis += "📊 PORTFOLIO OVERVIEW\n"
+            analysis += "-" * 30 + "\n"
+            analysis += f"• Total lease documents: {total_docs}\n"
+            analysis += f"• Unique clients: {len(clients)}\n"
+            analysis += f"• Unique locations: {len(locations)}\n"
+            analysis += f"• Building types: {len(building_types)}\n"
+            if area_count > 0:
+                avg_area = total_area / area_count
+                analysis += f"• Total leased area: {total_area:,.0f} sq ft\n"
+                analysis += f"• Average area per lease: {avg_area:,.0f} sq ft\n"
+            
+            # Client Analysis
+            if len(clients) > 0:
+                analysis += f"\n👥 CLIENT ANALYSIS\n"
+                analysis += "-" * 30 + "\n"
+                client_counts = {}
+                for doc in documents:
+                    client = doc.get("client_name", "Unknown")
+                    client_counts[client] = client_counts.get(client, 0) + 1
+                
+                sorted_clients = sorted(client_counts.items(), key=lambda x: x[1], reverse=True)
+                for client, count in sorted_clients[:10]:
+                    analysis += f"• {client}: {count} lease(s)\n"
+            
+            # Building Type Analysis
+            if building_types:
+                analysis += f"\n🏗️  BUILDING TYPE ANALYSIS\n"
+                analysis += "-" * 30 + "\n"
+                sorted_types = sorted(building_types.items(), key=lambda x: x[1], reverse=True)
+                for btype, count in sorted_types:
+                    percentage = (count / total_docs) * 100
+                    analysis += f"• {btype}: {count} leases ({percentage:.1f}%)\n"
+            
+            # Lease Expiry Analysis
+            if expiring_soon or expired:
+                analysis += f"\n⏰ LEASE EXPIRY ANALYSIS\n"
+                analysis += "-" * 30 + "\n"
+                
+                if expired:
+                    analysis += f"🔴 EXPIRED LEASES ({len(expired)}):\n"
+                    for doc, days_expired in sorted(expired, key=lambda x: x[1], reverse=True)[:5]:
+                        analysis += f"  • {doc.get('filename', 'Unknown')} - Expired {days_expired} days ago\n"
+                        analysis += f"    Client: {doc.get('client_name', 'Unknown')}\n"
+                        analysis += f"    Location: {doc.get('location', 'Unknown')}\n"
+                
+                if expiring_soon:
+                    analysis += f"\n🟡 EXPIRING SOON ({len(expiring_soon)}):\n"
+                    for doc, days_left in sorted(expiring_soon, key=lambda x: x[1])[:10]:
+                        analysis += f"  • {doc.get('filename', 'Unknown')} - {days_left} days remaining\n"
+                        analysis += f"    Client: {doc.get('client_name', 'Unknown')}\n"
+                        analysis += f"    Location: {doc.get('location', 'Unknown')}\n"
+            
+            # Location Hotspots
+            if len(locations) > 0:
+                analysis += f"\n📍 LOCATION ANALYSIS\n"
+                analysis += "-" * 30 + "\n"
+                location_counts = {}
+                for doc in documents:
+                    location = doc.get("location", "Unknown")
+                    # Extract city/state from location
+                    city = location.split(",")[0] if "," in location else location
+                    location_counts[city] = location_counts.get(city, 0) + 1
+                
+                sorted_locations = sorted(location_counts.items(), key=lambda x: x[1], reverse=True)
+                for location, count in sorted_locations[:10]:
+                    analysis += f"• {location}: {count} lease(s)\n"
+            
+            analysis += f"\n💡 KEY INSIGHTS\n"
+            analysis += "-" * 30 + "\n"
+            
+            if expired:
+                analysis += f"• ⚠️  {len(expired)} leases have already expired\n"
+            if expiring_soon:
+                analysis += f"• 📅 {len(expiring_soon)} leases expire within the next year\n"
+            if building_types:
+                most_common_type = max(building_types, key=building_types.get)
+                analysis += f"• 🏗️  Most common building type: {most_common_type} ({building_types[most_common_type]} leases)\n"
+            if len(clients) > 0:
+                top_client = max(client_counts, key=client_counts.get)
+                analysis += f"• 👑 Largest client: {top_client} ({client_counts[top_client]} leases)\n"
+            
+            return analysis
+            
+        except Exception as e:
+            return f"Error performing lease analysis: {str(e)}"
 
 
 class LeaseDocumentAgent:
@@ -398,7 +706,8 @@ class LeaseDocumentAgent:
                     openai_client=self.openai_client,
                     search_client=self.search_client,
                     embedding_model=self.embedding_model
-                )
+                ),
+                LeaseAnalysisTool(search_client=self.search_client)
             ]
             print(f"✅ Initialized {len(self.tools)} tools successfully")
             
@@ -440,21 +749,44 @@ class LeaseDocumentAgent:
         """Create the ReAct agent with custom prompt"""
         
         react_prompt = PromptTemplate.from_template("""
-You are a lease document processing agent with access to specialized tools for document analysis.
+You are an expert lease document analyst with access to powerful tools for comprehensive lease portfolio analysis. Your role is to provide detailed, actionable insights about lease agreements and portfolios.
 
-You have access to the following tools:
+CORE CAPABILITIES:
+- Azure OCR extraction from PDF documents
+- Vector-based semantic search across lease documents  
+- Location-based lease matching and analysis
+- Comprehensive lease portfolio analysis with business insights
+- Document ingestion into searchable vector database
+
+ANALYSIS APPROACH:
+Always provide meaningful analysis, not just raw data. When users ask questions:
+1. Use appropriate tools to gather comprehensive data
+2. Analyze patterns, trends, and key insights
+3. Provide actionable recommendations
+4. Highlight important dates, risks, and opportunities
+5. Present information in a structured, business-friendly format
+
+TOOLS AVAILABLE:
 {tools}
 
-Use the following format:
-
+RESPONSE FORMAT:
 Question: the input question you must answer
-Thought: you should always think about what to do
+Thought: analyze what information the user needs and plan your approach
 Action: the action to take, should be one of [{tool_names}]
 Action Input: the input to the action
 Observation: the result of the action
 ... (this Thought/Action/Action Input/Observation can repeat N times)
-Thought: I now know the final answer
-Final Answer: the final answer to the original input question
+Thought: I now have enough information to provide a comprehensive answer
+Final Answer: provide detailed analysis with insights, not just raw data
+
+IMPORTANT GUIDELINES:
+- Always provide business insights, not just counts or lists
+- Identify trends, risks, and opportunities in lease data
+- Structure your responses with clear sections and key takeaways
+- When discussing lease expirations, highlight renewal risks and opportunities
+- For location analysis, consider market concentrations and geographic risks
+- For client analysis, identify key relationships and portfolio concentrations
+- Always end with actionable recommendations when appropriate
 
 Begin!
 
