@@ -34,6 +34,7 @@ from azure.search.documents.indexes import SearchIndexClient
 from azure.search.documents.models import VectorizedQuery
 import openai
 from pydantic import BaseModel, Field
+from typing_extensions import TypedDict
 
 
 class LeaseInformation(BaseModel):
@@ -45,6 +46,8 @@ class LeaseInformation(BaseModel):
     building_area: Optional[str] = None
     area_unit: Optional[str] = None
     building_type: Optional[str] = None
+
+
 
 
 class AzureOCRTool(BaseTool):
@@ -768,9 +771,11 @@ class LeaseDocumentAgent:
             }
             if openai_base_url:
                 langchain_kwargs["base_url"] = openai_base_url
+            
+            # Create LLM for ReAct agent
             self.llm = ChatOpenAI(**langchain_kwargs)
             
-            # Test LangChain LLM
+            # Test LLM
             test_response = self.llm.invoke("Hello")
             print("✅ LangChain LLM initialized successfully")
             
@@ -792,81 +797,31 @@ class LeaseDocumentAgent:
         """Create the ReAct agent with custom prompt"""
         
         react_prompt = PromptTemplate.from_template("""
-You are an expert lease document analyst with access to powerful tools for comprehensive lease portfolio analysis. You can have normal conversations and provide detailed insights about lease agreements and portfolios.
+You are an expert lease document analyst. You can have conversations and use tools to analyze lease documents.
 
-CORE CAPABILITIES:
-- Azure OCR extraction from PDF documents
-- Vector-based semantic search across lease documents  
-- Location-based lease matching and analysis
-- Comprehensive lease portfolio analysis with business insights
-- Document ingestion into searchable vector database
+Available tools: {tools}
 
-CONVERSATION HANDLING:
-- Handle greetings, simple questions, and casual conversation naturally
-- Only use tools when you need to search, analyze, or process lease documents
-- For questions like "hi", "hello", "how are you", "what can you do" - respond directly without using tools
-- For lease-related queries, use the appropriate tools to gather data
+IMPORTANT: Always follow this exact format:
+- For simple conversations (greetings, questions about capabilities): Use "Final Answer:" directly
+- For lease analysis (searching, analyzing data): Use "Action:" with a tool, then "Final Answer:" with your analysis
 
-ANALYSIS APPROACH:
-When users ask lease-related questions:
-1. Use appropriate tools to gather comprehensive data
-2. Analyze patterns, trends, and key insights
-3. Provide actionable recommendations
-4. Highlight important dates, risks, and opportunities
-5. Present information in a structured, business-friendly format
+Examples:
 
-TOOLS AVAILABLE:
-{tools}
-
-RESPONSE FORMAT:
-Question: the input question you must answer
-Thought: determine if this needs tools or can be answered directly
-
-If tools are needed, use this format:
-Action: the action to take, should be one of [{tool_names}]
-Action Input: the input to the action
-Observation: the result of the action
-... (repeat Thought/Action/Action Input/Observation as needed)
-Thought: I now have enough information to provide a comprehensive answer
-Final Answer: provide detailed analysis with insights
-
-If no tools are needed, just respond directly after your thought.
-
-CONVERSATION EXAMPLES:
-
-Example 1 (Simple greeting - NO ACTION):
+Simple conversation:
 Question: Hi
-Thought: This is a simple greeting that doesn't require any lease document analysis tools.
-Hello! I'm your lease document analyst. I can help you search, analyze, and get insights from your lease documents. What would you like to know about your lease portfolio?
+Thought: This is a greeting, no tools needed.
+Final Answer: Hello! I'm your lease document analyst. I can help you search and analyze lease documents. What would you like to know?
 
-Example 2 (Capability question - NO ACTION):
-Question: What can you do?
-Thought: This is asking about my capabilities, not requesting lease analysis, so I don't need to use any tools.
-I can help you with comprehensive lease document analysis including:
-• Finding leases by client name or location
-• Analyzing lease portfolios for insights and trends  
-• Tracking lease expirations and renewal opportunities
-• Processing PDF documents with OCR
-• Searching for specific lease terms
-Just ask me about any lease documents or analysis you need!
-
-Example 3 (Lease query - USE TOOLS):
-Question: Find all leases for client2
-Thought: This requires searching through lease documents for a specific client, so I need to use the location_matcher tool.
+Lease analysis:
+Question: Find leases for client2
+Thought: I need to search for lease documents for client2.
 Action: location_matcher
 Action Input: client2
-Observation: [tool results]
-Thought: I now have the lease information for client2 and can provide a comprehensive analysis.
-Final Answer: [detailed analysis of client2 leases]
+Observation: [search results]
+Thought: Now I can analyze the results.
+Final Answer: [detailed analysis of client2's leases]
 
-IMPORTANT GUIDELINES:
-- Be conversational and helpful for all interactions
-- Only use tools for lease document analysis tasks
-- Always provide business insights for lease queries, not just raw data
-- Structure lease analysis responses with clear sections and key takeaways
-- End with actionable recommendations when appropriate
-
-Begin!
+You have access to these tools: {tool_names}
 
 Question: {input}
 Thought: {agent_scratchpad}
