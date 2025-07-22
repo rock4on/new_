@@ -664,6 +664,51 @@ class LeaseAnalysisTool(BaseTool):
             return f"Error performing lease analysis: {str(e)}"
 
 
+class BatchIngestionTool(BaseTool):
+    """Tool for batch ingesting all PDF documents from the default folder"""
+    
+    name: str = "batch_ingest"
+    description: str = "Automatically discovers and ingests all PDF documents from the default folder. Uses OCR to extract text and stores in vector database. Input can be empty '{}' or JSON with 'client_name' field to assign all documents to a specific client."
+    agent_instance: Any = Field(default=None, exclude=True)
+    
+    def __init__(self, agent_instance, **kwargs):
+        super().__init__(**kwargs)
+        object.__setattr__(self, 'agent_instance', agent_instance)
+    
+    def _run(self, input_data: str = "{}") -> str:
+        """Run batch ingestion of all PDFs in default folder"""
+        try:
+            print("   📁 Starting batch ingestion of all PDF documents...")
+            
+            # Parse input for optional client name
+            client_name = None
+            if input_data.strip() and input_data.strip() != "{}":
+                try:
+                    data = json.loads(input_data)
+                    client_name = data.get('client_name')
+                except json.JSONDecodeError:
+                    # If not valid JSON, treat as client name string
+                    client_name = input_data.strip()
+            
+            # Call the agent's ingest_all method
+            result = self.agent_instance.ingest_all(client_name=client_name)
+            
+            # Format response for the agent
+            if result['status'] == 'completed':
+                return f"✅ Successfully ingested all PDFs! Processed {result['successful']} files from {result['folder_path']}. All documents are now searchable in the vector database."
+            elif result['status'] == 'partial_success':
+                return f"⚠️ Partially successful batch ingestion: {result['successful']} files succeeded, {result['failed']} failed from {result['folder_path']}. Successfully processed documents are searchable."
+            elif result['status'] == 'warning':
+                return f"⚠️ No PDF files found in folder: {result.get('folder_path', 'default folder')}. Please check if PDFs exist in the configured folder."
+            elif result['status'] == 'failed':
+                return f"❌ Batch ingestion failed: all {result['failed']} files failed to process from {result['folder_path']}. Check file permissions and formats."
+            else:
+                return f"❌ Batch ingestion error: {result.get('error', 'Unknown error occurred during batch processing')}"
+                
+        except Exception as e:
+            return f"❌ Error during batch ingestion: {str(e)}"
+
+
 class LeaseDocumentAgent:
     """Main agent class for lease document processing"""
     
@@ -753,7 +798,8 @@ class LeaseDocumentAgent:
                     search_client=self.search_client,
                     embedding_model=self.embedding_model
                 ),
-                LeaseAnalysisTool(search_client=self.search_client)
+                LeaseAnalysisTool(search_client=self.search_client),
+                BatchIngestionTool(agent_instance=self)
             ]
             print(f"✅ Initialized {len(self.tools)} tools successfully")
             
@@ -804,13 +850,23 @@ Available tools: {tools}
 IMPORTANT: Always follow this exact format:
 - For simple conversations (greetings, questions about capabilities): Use "Final Answer:" directly
 - For lease analysis (searching, analyzing data): Use "Action:" with a tool, then "Final Answer:" with your analysis
+- For batch ingestion (processing PDF files): Use "batch_ingest" tool to automatically discover and process all PDFs
 
 Examples:
 
 Simple conversation:
 Question: Hi
 Thought: This is a greeting, no tools needed.
-Final Answer: Hello! I'm your lease document analyst. I can help you search and analyze lease documents. What would you like to know?
+Final Answer: Hello! I'm your lease document analyst. I can help you search and analyze lease documents, and ingest new PDF documents. What would you like to know?
+
+Batch ingestion:
+Question: Ingest all PDF documents
+Thought: I need to use the batch ingestion tool to process all PDF files in the folder.
+Action: batch_ingest
+Action Input: {{}}
+Observation: [ingestion results]
+Thought: The PDFs have been processed and are ready for analysis.
+Final Answer: [summary of ingestion results]
 
 Lease analysis:
 Question: Find leases for client2
