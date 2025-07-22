@@ -111,24 +111,44 @@ class LeaseAgentChat:
                 print(f"\n💡 Run 'python config.py' to create a sample configuration")
                 sys.exit(1)
             
-            # Create agent
-            self.agent = LeaseDocumentAgent(
-                azure_endpoint=self.config.AZURE_FORM_RECOGNIZER_ENDPOINT,
-                azure_key=self.config.AZURE_FORM_RECOGNIZER_KEY,
-                openai_api_key=self.config.OPENAI_API_KEY,
-                azure_search_endpoint=self.config.AZURE_SEARCH_ENDPOINT,
-                azure_search_key=self.config.AZURE_SEARCH_KEY,
-                search_index_name=self.config.AZURE_SEARCH_INDEX_NAME
-            )
+            print("\n🔧 Configuration Details:")
+            print(f"   Azure Form Recognizer: {self.config.AZURE_FORM_RECOGNIZER_ENDPOINT}")
+            print(f"   Azure Search: {self.config.AZURE_SEARCH_ENDPOINT}")
+            print(f"   Search Index: {self.config.AZURE_SEARCH_INDEX_NAME}")
+            print(f"   OpenAI Model: {self.config.OPENAI_MODEL}")
+            if self.config.OPENAI_BASE_URL:
+                print(f"   OpenAI Base URL: {self.config.OPENAI_BASE_URL}")
+            else:
+                print(f"   OpenAI Base URL: Standard OpenAI API")
+            
+            # Create agent with debugging enabled
+            from lease_agent import create_lease_agent_from_config
+            self.agent = create_lease_agent_from_config(self.config)
             
             # Update agent settings from config
             self.agent.agent_executor.verbose = self.config.AGENT_VERBOSE
             self.agent.agent_executor.max_iterations = self.config.AGENT_MAX_ITERATIONS
             
-            print("✅ Agent initialized successfully!")
-            
         except Exception as e:
-            print(f"❌ Failed to initialize agent: {e}")
+            print(f"\n❌ Failed to initialize agent: {e}")
+            print(f"\n🔍 Debug Information:")
+            print(f"   Error Type: {type(e).__name__}")
+            print(f"   Error Details: {str(e)}")
+            
+            # Check for common connection issues
+            if "connection" in str(e).lower() or "timeout" in str(e).lower():
+                print(f"\n💡 Possible connection issues:")
+                print(f"   - Check your internet connection")
+                print(f"   - Verify Azure/OpenAI service endpoints are correct")
+                print(f"   - Ensure API keys are valid and have proper permissions")
+                print(f"   - Check if services are running and accessible")
+            
+            if "authentication" in str(e).lower() or "unauthorized" in str(e).lower():
+                print(f"\n🔑 Authentication issues:")
+                print(f"   - Verify API keys are correct and not expired")
+                print(f"   - Check if keys have necessary permissions")
+                print(f"   - Ensure endpoints match the region of your keys")
+            
             sys.exit(1)
     
     def _initialize_chat_history(self):

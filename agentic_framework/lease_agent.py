@@ -56,10 +56,23 @@ class AzureOCRTool(BaseTool):
     
     def __init__(self, azure_endpoint: str, azure_key: str, **kwargs):
         super().__init__(**kwargs)
-        object.__setattr__(self, 'azure_client', DocumentAnalysisClient(
-            endpoint=azure_endpoint,
-            credential=AzureKeyCredential(azure_key)
-        ))
+        try:
+            print(f"   🔍 Testing Azure Form Recognizer connection...")
+            azure_client = DocumentAnalysisClient(
+                endpoint=azure_endpoint,
+                credential=AzureKeyCredential(azure_key)
+            )
+            
+            # Test the connection by checking the service
+            # Note: We can't easily test without a document, so we just initialize
+            object.__setattr__(self, 'azure_client', azure_client)
+            print(f"   ✅ Azure Form Recognizer tool initialized")
+            
+        except Exception as e:
+            print(f"   ❌ Azure Form Recognizer initialization failed: {e}")
+            print(f"   Endpoint: {azure_endpoint}")
+            print(f"   Key: {azure_key[:10]}...{azure_key[-4:] if len(azure_key) > 10 else 'invalid'}")
+            raise ConnectionError(f"Azure Form Recognizer initialization failed: {e}")
     
     def _run(self, file_path: str) -> str:
         """Extract text from PDF file"""
@@ -293,45 +306,110 @@ class LeaseDocumentAgent:
                  openai_model: str = "gpt-4o-mini",
                  openai_temperature: float = 0.1):
         
-        # Initialize OpenAI client
-        openai_kwargs = {"api_key": openai_api_key}
+        print("🔧 Initializing Lease Document Agent...")
+        print(f"   Azure Form Recognizer: {azure_endpoint[:50]}...")
+        print(f"   Azure Search: {azure_search_endpoint[:50]}...")
+        print(f"   OpenAI Model: {openai_model}")
         if openai_base_url:
-            openai_kwargs["base_url"] = openai_base_url
-        self.openai_client = openai.OpenAI(**openai_kwargs)
+            print(f"   OpenAI Base URL: {openai_base_url[:50]}...")
         
-        # Initialize Azure Search client
-        self.search_client = SearchClient(
-            endpoint=azure_search_endpoint,
-            index_name=search_index_name,
-            credential=AzureKeyCredential(azure_search_key)
-        )
+        # Initialize OpenAI client with debugging
+        try:
+            print("🔍 Testing OpenAI connection...")
+            openai_kwargs = {"api_key": openai_api_key}
+            if openai_base_url:
+                openai_kwargs["base_url"] = openai_base_url
+            self.openai_client = openai.OpenAI(**openai_kwargs)
+            
+            # Test connection with a simple request
+            test_response = self.openai_client.models.list()
+            print("✅ OpenAI connection successful")
+            
+        except Exception as e:
+            print(f"❌ OpenAI connection failed: {e}")
+            print(f"   API Key: {openai_api_key[:10]}...{openai_api_key[-4:] if len(openai_api_key) > 10 else 'invalid'}")
+            if openai_base_url:
+                print(f"   Base URL: {openai_base_url}")
+            raise ConnectionError(f"OpenAI connection failed: {e}")
         
-        # Initialize tools
-        self.tools = [
-            AzureOCRTool(azure_endpoint=azure_endpoint, azure_key=azure_key),
-            VectorStoreIngestionTool(
-                openai_client=self.openai_client,
-                search_client=self.search_client
-            ),
-            LocationMatchingTool(search_client=self.search_client),
-            VectorSearchTool(
-                openai_client=self.openai_client,
-                search_client=self.search_client
+        # Initialize Azure Search client with debugging
+        try:
+            print("🔍 Testing Azure Search connection...")
+            self.search_client = SearchClient(
+                endpoint=azure_search_endpoint,
+                index_name=search_index_name,
+                credential=AzureKeyCredential(azure_search_key)
             )
-        ]
+            
+            # Test connection by trying to get index info
+            try:
+                # Simple test to verify connection
+                search_results = list(self.search_client.search("*", top=1))
+                print("✅ Azure Search connection successful")
+            except Exception as search_e:
+                if "404" in str(search_e) or "index" in str(search_e).lower():
+                    print(f"⚠️  Azure Search connected but index '{search_index_name}' may not exist: {search_e}")
+                    print("   This is OK - index will be created when first document is uploaded")
+                else:
+                    raise search_e
+            
+        except Exception as e:
+            print(f"❌ Azure Search connection failed: {e}")
+            print(f"   Endpoint: {azure_search_endpoint}")
+            print(f"   Index: {search_index_name}")
+            print(f"   Key: {azure_search_key[:10]}...{azure_search_key[-4:] if len(azure_search_key) > 10 else 'invalid'}")
+            raise ConnectionError(f"Azure Search connection failed: {e}")
         
-        # Initialize LangChain LLM
-        langchain_kwargs = {
-            "model": openai_model,
-            "api_key": openai_api_key,
-            "temperature": openai_temperature
-        }
-        if openai_base_url:
-            langchain_kwargs["base_url"] = openai_base_url
-        self.llm = ChatOpenAI(**langchain_kwargs)
+        # Initialize tools with debugging
+        try:
+            print("🛠️  Initializing tools...")
+            self.tools = [
+                AzureOCRTool(azure_endpoint=azure_endpoint, azure_key=azure_key),
+                VectorStoreIngestionTool(
+                    openai_client=self.openai_client,
+                    search_client=self.search_client
+                ),
+                LocationMatchingTool(search_client=self.search_client),
+                VectorSearchTool(
+                    openai_client=self.openai_client,
+                    search_client=self.search_client
+                )
+            ]
+            print(f"✅ Initialized {len(self.tools)} tools successfully")
+            
+        except Exception as e:
+            print(f"❌ Tool initialization failed: {e}")
+            raise ConnectionError(f"Tool initialization failed: {e}")
         
-        # Create ReAct agent
-        self._create_agent()
+        # Initialize LangChain LLM with debugging
+        try:
+            print("🤖 Initializing LangChain LLM...")
+            langchain_kwargs = {
+                "model": openai_model,
+                "api_key": openai_api_key,
+                "temperature": openai_temperature
+            }
+            if openai_base_url:
+                langchain_kwargs["base_url"] = openai_base_url
+            self.llm = ChatOpenAI(**langchain_kwargs)
+            
+            # Test LangChain LLM
+            test_response = self.llm.invoke("Hello")
+            print("✅ LangChain LLM initialized successfully")
+            
+        except Exception as e:
+            print(f"❌ LangChain LLM initialization failed: {e}")
+            raise ConnectionError(f"LangChain LLM initialization failed: {e}")
+        
+        # Create ReAct agent with debugging
+        try:
+            print("🎯 Creating ReAct agent...")
+            self._create_agent()
+            print("✅ Agent initialization completed successfully!")
+            
+        except Exception as e:
+            print(f"❌ Agent creation failed: {e}")
+            raise ConnectionError(f"Agent creation failed: {e}")
     
     def _create_agent(self):
         """Create the ReAct agent with custom prompt"""
