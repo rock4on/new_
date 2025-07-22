@@ -979,6 +979,110 @@ Just ask me about any lease documents or analysis you need! For example:
                 "question": question,
                 "error": str(e)
             }
+    
+    def batch_ingest_pdfs(self, folder_path: Optional[str] = None, client_name: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Batch ingest all PDF documents from a folder
+        
+        Args:
+            folder_path: Path to folder containing PDFs. If None, uses DEFAULT_INPUT_FOLDER from config
+            client_name: Optional client name to associate with all documents
+            
+        Returns:
+            Dictionary with processing results for each file
+        """
+        from config import get_config
+        
+        # Use provided folder or default from config
+        if folder_path is None:
+            config = get_config()
+            folder_path = config.DEFAULT_INPUT_FOLDER
+        
+        folder = Path(folder_path)
+        
+        if not folder.exists():
+            return {
+                "status": "error",
+                "error": f"Folder does not exist: {folder_path}",
+                "results": []
+            }
+        
+        # Find all PDF files recursively
+        pdf_files = list(folder.rglob("*.pdf"))
+        
+        if not pdf_files:
+            return {
+                "status": "warning",
+                "message": f"No PDF files found in folder: {folder_path}",
+                "results": []
+            }
+        
+        print(f"📁 Found {len(pdf_files)} PDF files to process in {folder_path}")
+        
+        results = []
+        successful = 0
+        failed = 0
+        
+        for pdf_file in pdf_files:
+            print(f"\n📄 Processing: {pdf_file.name}")
+            
+            # Determine client name from folder structure if not provided
+            effective_client_name = client_name
+            if not effective_client_name:
+                # Try to extract client name from parent directory
+                if pdf_file.parent.name != folder.name:
+                    effective_client_name = pdf_file.parent.name
+                else:
+                    effective_client_name = "Unknown"
+            
+            try:
+                # Process individual document
+                result = self.process_document(
+                    file_path=str(pdf_file),
+                    client_name=effective_client_name
+                )
+                
+                results.append(result)
+                
+                if result["status"] == "success":
+                    successful += 1
+                    print(f"   ✅ Successfully processed {pdf_file.name}")
+                else:
+                    failed += 1
+                    print(f"   ❌ Failed to process {pdf_file.name}: {result.get('error', 'Unknown error')}")
+                    
+            except Exception as e:
+                failed += 1
+                error_result = {
+                    "status": "error",
+                    "file_path": str(pdf_file),
+                    "client_name": effective_client_name,
+                    "error": str(e)
+                }
+                results.append(error_result)
+                print(f"   ❌ Exception processing {pdf_file.name}: {e}")
+        
+        return {
+            "status": "completed" if failed == 0 else "partial_success" if successful > 0 else "failed",
+            "folder_path": str(folder_path),
+            "total_files": len(pdf_files),
+            "successful": successful,
+            "failed": failed,
+            "results": results
+        }
+    
+    def ingest_all(self, client_name: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Simple method to ingest all PDF documents from the default folder
+        No path needed - uses the DEFAULT_INPUT_FOLDER from config
+        
+        Args:
+            client_name: Optional client name to associate with all documents
+            
+        Returns:
+            Dictionary with processing results for each file
+        """
+        return self.batch_ingest_pdfs(folder_path=None, client_name=client_name)
 
 
 def create_lease_agent_from_env() -> LeaseDocumentAgent:

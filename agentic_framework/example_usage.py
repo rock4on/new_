@@ -173,10 +173,69 @@ def batch_process_example():
     print(f"\n💾 Results saved to: {results_file}")
 
 
+def batch_ingest_example():
+    """Example of the new batch ingestion functionality"""
+    
+    print("\n📦 Batch Ingestion Example")
+    print("-" * 40)
+    
+    try:
+        agent = create_lease_agent_from_env()
+    except Exception as e:
+        print(f"❌ Cannot create agent: {e}")
+        return
+    
+    # Example 1: Ingest all PDFs from default folder (no path needed)
+    print("\n🚀 Example 1: Ingest all PDFs from default folder")
+    print("   Simply call agent.ingest_all() - no path needed!")
+    
+    result = agent.ingest_all()
+    
+    print(f"Status: {result['status']}")
+    print(f"Total files found: {result['total_files']}")
+    print(f"Successfully processed: {result['successful']}")
+    print(f"Failed: {result['failed']}")
+    print(f"Folder processed: {result['folder_path']}")
+    
+    # Example 2: Batch ingest with specific client name
+    print("\n🏢 Example 2: Batch ingest with specific client name")
+    result_with_client = agent.ingest_all(client_name="Batch Client Example")
+    
+    print(f"Status: {result_with_client['status']}")
+    print(f"All documents assigned to client: 'Batch Client Example'")
+    
+    # Example 3: Batch ingest from specific folder
+    print("\n📁 Example 3: Batch ingest from specific folder")
+    custom_folder = "../custom_leases"  # Example custom path
+    
+    result_custom = agent.batch_ingest_pdfs(
+        folder_path=custom_folder,
+        client_name="Custom Folder Client"
+    )
+    
+    if result_custom['status'] == 'error':
+        print(f"⚠️  Custom folder example: {result_custom['error']}")
+    else:
+        print(f"Status: {result_custom['status']}")
+        print(f"Total files: {result_custom['total_files']}")
+    
+    print("\n✅ Batch ingestion examples completed!")
+    print("\n💡 Key benefits of batch ingestion:")
+    print("   • No need to specify individual file paths")
+    print("   • Automatically discovers all PDFs in folders")
+    print("   • Supports recursive folder scanning")
+    print("   • Handles errors gracefully for individual files")
+    print("   • Provides detailed progress reporting")
+
+
 if __name__ == "__main__":
     # Run main examples
     main()
     
-    # Optionally run batch processing example
+    # Run new batch ingestion example
+    print("\n" + "=" * 50)
+    batch_ingest_example()
+    
+    # Optionally run original batch processing example
     print("\n" + "=" * 50)
     batch_process_example()
