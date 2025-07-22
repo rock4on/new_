@@ -32,7 +32,10 @@ from azure.core.credentials import AzureKeyCredential
 from azure.search.documents import SearchClient
 from azure.search.documents.indexes import SearchIndexClient
 from azure.search.documents.models import VectorizedQuery
+from azure.core.pipeline.transport import RequestsTransport
 import openai
+import ssl
+import urllib3
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
@@ -61,9 +64,17 @@ class AzureOCRTool(BaseTool):
         super().__init__(**kwargs)
         try:
             print(f"   🔍 Testing Azure Form Recognizer connection...")
+            
+            # Disable SSL warnings
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            
+            # Create a transport with SSL verification disabled
+            transport = RequestsTransport(verify=False)
+            
             azure_client = DocumentAnalysisClient(
                 endpoint=azure_endpoint,
-                credential=AzureKeyCredential(azure_key)
+                credential=AzureKeyCredential(azure_key),
+                transport=transport
             )
             
             # Test the connection by checking the service
@@ -757,10 +768,15 @@ class LeaseDocumentAgent:
         # Initialize Azure Search client with debugging
         try:
             print("🔍 Testing Azure Search connection...")
+            
+            # Create transport with SSL verification disabled for Search client
+            search_transport = RequestsTransport(verify=False)
+            
             self.search_client = SearchClient(
                 endpoint=azure_search_endpoint,
                 index_name=search_index_name,
-                credential=AzureKeyCredential(azure_search_key)
+                credential=AzureKeyCredential(azure_search_key),
+                transport=search_transport
             )
             
             # Test connection by trying to get index info
