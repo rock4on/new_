@@ -37,7 +37,7 @@ import json
 import argparse
 from pathlib import Path
 from typing import Dict, List, Optional, Any
-from datetime import datetime
+from datetime import datetime, timezone
 import csv
 import time
 import threading
@@ -475,7 +475,7 @@ class LeaseDocumentProcessor:
                 "building_area": document_data.get('building_area'),
                 "area_unit": document_data.get('area_unit'),
                 "building_type": document_data.get('building_type'),
-                "processed_at": datetime.now().isoformat()
+                "processed_at": datetime.now().replace(tzinfo=timezone.utc).isoformat()
             }
             
             # Upload to search index
