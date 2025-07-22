@@ -282,10 +282,16 @@ class LeaseDocumentAgent:
                  openai_api_key: str,
                  azure_search_endpoint: str,
                  azure_search_key: str,
-                 search_index_name: str = "lease-documents"):
+                 search_index_name: str = "lease-documents",
+                 openai_base_url: Optional[str] = None,
+                 openai_model: str = "gpt-4o-mini",
+                 openai_temperature: float = 0.1):
         
         # Initialize OpenAI client
-        self.openai_client = openai.OpenAI(api_key=openai_api_key)
+        openai_kwargs = {"api_key": openai_api_key}
+        if openai_base_url:
+            openai_kwargs["base_url"] = openai_base_url
+        self.openai_client = openai.OpenAI(**openai_kwargs)
         
         # Initialize Azure Search client
         self.search_client = SearchClient(
@@ -309,11 +315,14 @@ class LeaseDocumentAgent:
         ]
         
         # Initialize LangChain LLM
-        self.llm = ChatOpenAI(
-            model="gpt-4o-mini",
-            api_key=openai_api_key,
-            temperature=0.1
-        )
+        langchain_kwargs = {
+            "model": openai_model,
+            "api_key": openai_api_key,
+            "temperature": openai_temperature
+        }
+        if openai_base_url:
+            langchain_kwargs["base_url"] = openai_base_url
+        self.llm = ChatOpenAI(**langchain_kwargs)
         
         # Create ReAct agent
         self._create_agent()
@@ -488,5 +497,8 @@ def create_lease_agent_from_config(config) -> LeaseDocumentAgent:
         openai_api_key=config.OPENAI_API_KEY,
         azure_search_endpoint=config.AZURE_SEARCH_ENDPOINT,
         azure_search_key=config.AZURE_SEARCH_KEY,
-        search_index_name=config.AZURE_SEARCH_INDEX_NAME
+        search_index_name=config.AZURE_SEARCH_INDEX_NAME,
+        openai_base_url=config.OPENAI_BASE_URL or None,
+        openai_model=config.OPENAI_MODEL,
+        openai_temperature=config.OPENAI_TEMPERATURE
     )

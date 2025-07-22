@@ -18,6 +18,7 @@ class Config:
     
     # OpenAI settings
     OPENAI_API_KEY: str = ""
+    OPENAI_BASE_URL: str = ""  # For custom OpenAI endpoints (Azure OpenAI, etc.)
     OPENAI_MODEL: str = "gpt-4o-mini"
     OPENAI_EMBEDDING_MODEL: str = "text-embedding-ada-002"
     OPENAI_TEMPERATURE: float = 0.1
@@ -58,6 +59,7 @@ class Config:
         
         # OpenAI
         config.OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', config.OPENAI_API_KEY)
+        config.OPENAI_BASE_URL = os.getenv('OPENAI_BASE_URL', config.OPENAI_BASE_URL)
         config.OPENAI_MODEL = os.getenv('OPENAI_MODEL', config.OPENAI_MODEL)
         config.OPENAI_EMBEDDING_MODEL = os.getenv('OPENAI_EMBEDDING_MODEL', config.OPENAI_EMBEDDING_MODEL)
         config.OPENAI_TEMPERATURE = float(os.getenv('OPENAI_TEMPERATURE', str(config.OPENAI_TEMPERATURE)))
@@ -107,6 +109,8 @@ config.AZURE_FORM_RECOGNIZER_KEY = "your-form-recognizer-key-here"
 # REQUIRED: OpenAI Settings
 # =============================================================================
 config.OPENAI_API_KEY = "sk-your-openai-api-key-here"
+config.OPENAI_BASE_URL = ""  # Leave empty for standard OpenAI API, or set custom endpoint
+                             # Example for Azure OpenAI: "https://your-resource.openai.azure.com/"
 config.OPENAI_MODEL = "gpt-4o-mini"  # or "gpt-4o", "gpt-3.5-turbo"
 config.OPENAI_EMBEDDING_MODEL = "text-embedding-ada-002"
 config.OPENAI_TEMPERATURE = 0.1  # Lower = more deterministic
