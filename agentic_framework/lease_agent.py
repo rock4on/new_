@@ -104,21 +104,29 @@ class VectorStoreIngestionTool(BaseTool):
     description: str = "Ingests text content into vector store with embeddings. Input should be JSON with 'text', 'filename', 'metadata' fields."
     openai_client: Any = Field(default=None, exclude=True)
     search_client: Any = Field(default=None, exclude=True)
+    embedding_model: str = Field(default="text-embedding-ada-002", exclude=True)
     
-    def __init__(self, openai_client, search_client: SearchClient, **kwargs):
+    def __init__(self, openai_client, search_client: SearchClient, embedding_model: str = "text-embedding-ada-002", **kwargs):
         super().__init__(**kwargs)
         object.__setattr__(self, 'openai_client', openai_client)
         object.__setattr__(self, 'search_client', search_client)
+        object.__setattr__(self, 'embedding_model', embedding_model)
     
     def _generate_embedding(self, text: str) -> List[float]:
         """Generate embedding for text"""
         try:
+            print(f"   🔤 Generating embedding for text ({len(text)} chars)...")
             response = self.openai_client.embeddings.create(
-                model="text-embedding-ada-002",
-                input=text
+                model=self.embedding_model,
+                input=text[:8000]  # Limit text length to avoid token limits
             )
-            return response.data[0].embedding
+            embedding = response.data[0].embedding
+            print(f"   ✅ Embedding generated: {len(embedding)} dimensions")
+            return embedding
         except Exception as e:
+            print(f"   ❌ Failed to generate embedding: {e}")
+            print(f"   Text length: {len(text)} chars")
+            print(f"   Text preview: {text[:100]}...")
             return []
     
     def _run(self, input_data: str) -> str:
@@ -223,21 +231,31 @@ class VectorSearchTool(BaseTool):
     description: str = "Performs vector search to find relevant documents and extract specific fields. Input should be JSON with 'query' and 'fields' (list of field names to extract)."
     openai_client: Any = Field(default=None, exclude=True)
     search_client: Any = Field(default=None, exclude=True)
+    embedding_model: str = Field(default="text-embedding-ada-002", exclude=True)
     
-    def __init__(self, openai_client, search_client: SearchClient, **kwargs):
+    def __init__(self, openai_client, search_client: SearchClient, embedding_model: str = "text-embedding-ada-002", **kwargs):
         super().__init__(**kwargs)
         object.__setattr__(self, 'openai_client', openai_client)
         object.__setattr__(self, 'search_client', search_client)
+        object.__setattr__(self, 'embedding_model', embedding_model)
     
     def _generate_query_embedding(self, query: str) -> List[float]:
         """Generate embedding for search query"""
         try:
+            print(f"   🔤 Generating query embedding for: '{query[:100]}...'")
             response = self.openai_client.embeddings.create(
-                model="text-embedding-ada-002",
+                model=self.embedding_model, 
                 input=query
             )
-            return response.data[0].embedding
+            embedding = response.data[0].embedding
+            print(f"   ✅ Query embedding generated: {len(embedding)} dimensions")
+            return embedding
         except Exception as e:
+            print(f"   ❌ Failed to generate query embedding: {e}")
+            print(f"   Query: '{query}'")
+            print(f"   Query length: {len(query)} chars")
+            print(f"   OpenAI client: {type(self.openai_client)}")
+            print(f"   Has API key: {'Yes' if hasattr(self.openai_client, 'api_key') else 'No'}")
             return []
     
     def _run(self, input_data: str) -> str:
@@ -304,12 +322,17 @@ class LeaseDocumentAgent:
                  search_index_name: str = "lease-documents",
                  openai_base_url: Optional[str] = None,
                  openai_model: str = "gpt-4o-mini",
-                 openai_temperature: float = 0.1):
+                 openai_temperature: float = 0.1,
+                 openai_embedding_model: str = "text-embedding-ada-002"):
+        
+        # Store configuration
+        self.embedding_model = openai_embedding_model
         
         print("🔧 Initializing Lease Document Agent...")
         print(f"   Azure Form Recognizer: {azure_endpoint[:50]}...")
         print(f"   Azure Search: {azure_search_endpoint[:50]}...")
         print(f"   OpenAI Model: {openai_model}")
+        print(f"   OpenAI Embedding Model: {openai_embedding_model}")
         if openai_base_url:
             print(f"   OpenAI Base URL: {openai_base_url[:50]}...")
         
@@ -367,12 +390,14 @@ class LeaseDocumentAgent:
                 AzureOCRTool(azure_endpoint=azure_endpoint, azure_key=azure_key),
                 VectorStoreIngestionTool(
                     openai_client=self.openai_client,
-                    search_client=self.search_client
+                    search_client=self.search_client,
+                    embedding_model=self.embedding_model
                 ),
                 LocationMatchingTool(search_client=self.search_client),
                 VectorSearchTool(
                     openai_client=self.openai_client,
-                    search_client=self.search_client
+                    search_client=self.search_client,
+                    embedding_model=self.embedding_model
                 )
             ]
             print(f"✅ Initialized {len(self.tools)} tools successfully")
@@ -584,5 +609,6 @@ def create_lease_agent_from_config(config) -> LeaseDocumentAgent:
         search_index_name=config.AZURE_SEARCH_INDEX_NAME,
         openai_base_url=config.OPENAI_BASE_URL or None,
         openai_model=config.OPENAI_MODEL,
-        openai_temperature=config.OPENAI_TEMPERATURE
+        openai_temperature=config.OPENAI_TEMPERATURE,
+        openai_embedding_model=config.OPENAI_EMBEDDING_MODEL
     )
