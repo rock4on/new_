@@ -4,6 +4,7 @@ Configuration file for the Lease Document Processing Agent
 Centralized settings for easy management
 """
 
+
 import os
 from pathlib import Path
 from typing import Dict, Any, Optional
