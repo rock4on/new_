@@ -963,6 +963,55 @@ Thought: {agent_scratchpad}
         """Ask the agent any question about lease documents"""
         
         try:
+            # Check if this is a simple conversational question that doesn't need tools
+            simple_queries = [
+                'hi', 'hello', 'hey', 'good morning', 'good afternoon', 'good evening',
+                'how are you', 'what can you do', 'help', 'what do you do',
+                'thanks', 'thank you', 'bye', 'goodbye'
+            ]
+            
+            question_lower = question.lower().strip()
+            
+            # Handle simple conversational responses directly
+            if any(greeting in question_lower for greeting in simple_queries[:6]):  # greetings
+                return {
+                    "status": "success",
+                    "question": question,
+                    "result": "Hello! I'm your lease document analyst. I can help you search, analyze, and get insights from your lease documents. What would you like to know about your lease portfolio?"
+                }
+            elif any(capability in question_lower for capability in ['what can you do', 'help', 'what do you do']):
+                return {
+                    "status": "success", 
+                    "question": question,
+                    "result": """I can help you with comprehensive lease document analysis including:
+• Finding leases by client name or location
+• Analyzing lease portfolios for insights and trends  
+• Tracking lease expirations and renewal opportunities
+• Processing PDF documents with OCR
+• Searching for specific lease terms
+• Generating portfolio summaries and reports
+
+Just ask me about any lease documents or analysis you need! For example:
+- "Find all leases for client2"
+- "Show me office buildings in Chicago"
+- "What leases expire in 2024?"
+- "Give me a portfolio summary"
+"""
+                }
+            elif any(thanks in question_lower for thanks in ['thanks', 'thank you']):
+                return {
+                    "status": "success",
+                    "question": question, 
+                    "result": "You're welcome! Let me know if you need any other lease analysis or have questions about your portfolio."
+                }
+            elif any(bye in question_lower for bye in ['bye', 'goodbye']):
+                return {
+                    "status": "success",
+                    "question": question,
+                    "result": "Goodbye! Feel free to come back anytime you need lease document analysis."
+                }
+            
+            # For lease-related queries, use the agent
             result = self.agent_executor.invoke({"input": question})
             return {
                 "status": "success",
