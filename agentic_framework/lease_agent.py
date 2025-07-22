@@ -50,15 +50,16 @@ class LeaseInformation(BaseModel):
 class AzureOCRTool(BaseTool):
     """Tool for extracting text from PDF documents using Azure Form Recognizer"""
     
-    name = "azure_ocr_extractor"
-    description = "Extracts text from PDF documents using Azure Form Recognizer OCR. Input should be the file path to a PDF document."
+    name: str = "azure_ocr_extractor"
+    description: str = "Extracts text from PDF documents using Azure Form Recognizer OCR. Input should be the file path to a PDF document."
+    azure_client: Any = Field(default=None, exclude=True)
     
     def __init__(self, azure_endpoint: str, azure_key: str, **kwargs):
         super().__init__(**kwargs)
-        self.azure_client = DocumentAnalysisClient(
+        object.__setattr__(self, 'azure_client', DocumentAnalysisClient(
             endpoint=azure_endpoint,
             credential=AzureKeyCredential(azure_key)
-        )
+        ))
     
     def _run(self, file_path: str) -> str:
         """Extract text from PDF file"""
@@ -86,13 +87,15 @@ class AzureOCRTool(BaseTool):
 class VectorStoreIngestionTool(BaseTool):
     """Tool for ingesting text into vector store with embeddings"""
     
-    name = "vector_store_ingest"
-    description = "Ingests text content into vector store with embeddings. Input should be JSON with 'text', 'filename', 'metadata' fields."
+    name: str = "vector_store_ingest"
+    description: str = "Ingests text content into vector store with embeddings. Input should be JSON with 'text', 'filename', 'metadata' fields."
+    openai_client: Any = Field(default=None, exclude=True)
+    search_client: Any = Field(default=None, exclude=True)
     
     def __init__(self, openai_client, search_client: SearchClient, **kwargs):
         super().__init__(**kwargs)
-        self.openai_client = openai_client
-        self.search_client = search_client
+        object.__setattr__(self, 'openai_client', openai_client)
+        object.__setattr__(self, 'search_client', search_client)
     
     def _generate_embedding(self, text: str) -> List[float]:
         """Generate embedding for text"""
@@ -161,12 +164,13 @@ class VectorStoreIngestionTool(BaseTool):
 class LocationMatchingTool(BaseTool):
     """Tool for matching documents by location"""
     
-    name = "location_matcher"
-    description = "Finds documents matching a specific location. Input should be the location string to search for."
+    name: str = "location_matcher"
+    description: str = "Finds documents matching a specific location. Input should be the location string to search for."
+    search_client: Any = Field(default=None, exclude=True)
     
     def __init__(self, search_client: SearchClient, **kwargs):
         super().__init__(**kwargs)
-        self.search_client = search_client
+        object.__setattr__(self, 'search_client', search_client)
     
     def _run(self, location: str) -> str:
         """Find documents matching the specified location"""
@@ -202,13 +206,15 @@ class LocationMatchingTool(BaseTool):
 class VectorSearchTool(BaseTool):
     """Tool for performing vector search to extract desired fields"""
     
-    name = "vector_search_fields"
-    description = "Performs vector search to find relevant documents and extract specific fields. Input should be JSON with 'query' and 'fields' (list of field names to extract)."
+    name: str = "vector_search_fields"
+    description: str = "Performs vector search to find relevant documents and extract specific fields. Input should be JSON with 'query' and 'fields' (list of field names to extract)."
+    openai_client: Any = Field(default=None, exclude=True)
+    search_client: Any = Field(default=None, exclude=True)
     
     def __init__(self, openai_client, search_client: SearchClient, **kwargs):
         super().__init__(**kwargs)
-        self.openai_client = openai_client
-        self.search_client = search_client
+        object.__setattr__(self, 'openai_client', openai_client)
+        object.__setattr__(self, 'search_client', search_client)
     
     def _generate_query_embedding(self, query: str) -> List[float]:
         """Generate embedding for search query"""
