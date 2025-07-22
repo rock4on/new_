@@ -472,3 +472,21 @@ def create_lease_agent_from_env() -> LeaseDocumentAgent:
         azure_search_key=os.getenv('AZURE_SEARCH_KEY'),
         search_index_name=os.getenv('AZURE_SEARCH_INDEX_NAME', 'lease-documents')
     )
+
+
+def create_lease_agent_from_config(config) -> LeaseDocumentAgent:
+    """Create agent instance from configuration object"""
+    
+    # Validate configuration
+    is_valid, missing_fields = config.validate()
+    if not is_valid:
+        raise ValueError(f"Configuration is incomplete. Missing fields: {', '.join(missing_fields)}")
+    
+    return LeaseDocumentAgent(
+        azure_endpoint=config.AZURE_FORM_RECOGNIZER_ENDPOINT,
+        azure_key=config.AZURE_FORM_RECOGNIZER_KEY,
+        openai_api_key=config.OPENAI_API_KEY,
+        azure_search_endpoint=config.AZURE_SEARCH_ENDPOINT,
+        azure_search_key=config.AZURE_SEARCH_KEY,
+        search_index_name=config.AZURE_SEARCH_INDEX_NAME
+    )

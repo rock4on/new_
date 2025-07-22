@@ -32,14 +32,29 @@ The agent provides the following capabilities through specialized tools:
 - **Field Extraction**: Extract specific lease information (dates, areas, types, etc.)
 - **Conversational Interface**: Ask natural language questions about your document collection
 
-## Installation
+## Quick Start
+
+### Option 1: Automated Setup
+```bash
+python setup.py
+```
+Follow the prompts to install dependencies and configure the agent.
+
+### Option 2: Manual Setup
 
 1. Install required packages:
 ```bash
 pip install -r requirements.txt
 ```
 
-2. Set up environment variables:
+2. Create configuration file:
+```bash
+python config.py  # Creates config_sample.py
+cp config_sample.py config_local.py
+# Edit config_local.py with your actual values
+```
+
+3. Alternative: Set up environment variables:
 ```bash
 export AZURE_FORM_RECOGNIZER_ENDPOINT="your_azure_endpoint"
 export AZURE_FORM_RECOGNIZER_KEY="your_azure_key"
@@ -49,15 +64,56 @@ export AZURE_SEARCH_KEY="your_search_key"
 export AZURE_SEARCH_INDEX_NAME="lease-documents"  # optional
 ```
 
+### Start Chatting
+```bash
+python chat_agent.py
+```
+
 ## Usage
 
-### Basic Usage
+### Interactive Chat Interface
+
+The easiest way to use the agent is through the interactive chat interface:
+
+```bash
+python chat_agent.py
+```
+
+This provides a conversational interface where you can:
+- Ask natural language questions
+- Process documents interactively
+- Get help with `/help` command
+- View chat history with `/history`
+- Use various shortcuts and commands
+
+Example chat session:
+```
+👤 You: Process the lease document at ../leases/client1/lease.pdf
+🤖 Agent: I'll process that lease document for you using Azure OCR and store it in the vector database...
+
+👤 You: Find all office buildings in Chicago
+🤖 Agent: I found 3 office buildings in Chicago: ...
+
+👤 You: What's the average lease area?
+🤖 Agent: Based on the documents in the database, the average lease area is 5,420 sq ft...
+```
+
+### Chat Commands
+- `/help` - Show detailed help
+- `/history` - View recent chat history  
+- `/status` - Check system status
+- `/clear` - Clear chat history
+- `/quit` - Exit chat
+
+### Programmatic Usage
 
 ```python
-from lease_agent import create_lease_agent_from_env
+from lease_agent import create_lease_agent_from_config
+from config import get_config
 
-# Create agent from environment variables
-agent = create_lease_agent_from_env()
+# Create agent from configuration
+config = get_config()
+agent = create_lease_agent_from_config(config)
 
 # Process a document
 result = agent.process_document(
