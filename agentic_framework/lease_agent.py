@@ -183,10 +183,10 @@ class VectorStoreIngestionTool(BaseTool):
 
 
 class LocationMatchingTool(BaseTool):
-    """Tool for matching documents by location"""
+    """Tool for matching documents by location or client name"""
     
     name: str = "location_matcher"
-    description: str = "Finds documents matching a specific location. Input should be the location string to search for."
+    description: str = "Finds lease documents matching a specific location OR client name. Input should be the location or client name to search for (e.g., 'Chicago', 'client2', 'ABC Corporation')."
     search_client: Any = Field(default=None, exclude=True)
     
     def __init__(self, search_client: SearchClient, **kwargs):
@@ -194,18 +194,34 @@ class LocationMatchingTool(BaseTool):
         object.__setattr__(self, 'search_client', search_client)
     
     def _run(self, location: str) -> str:
-        """Find documents matching the specified location"""
+        """Find documents matching the specified location or client"""
         try:
-            # Search for documents with matching location
+            # Search for documents with matching location or client name
+            # Use multiple search approaches to catch client names
             search_results = self.search_client.search(
-                search_text=location,
+                search_text=f"{location}",
                 select=["id", "filename", "location", "client_name", "lease_start_date", 
                        "lease_end_date", "building_area", "area_unit", "building_type", "processed_at"],
-                top=20
+                top=100  # Get more results to handle pagination
             )
             
+            # Also try a filter-based search for exact client matches
+            try:
+                filtered_results = self.search_client.search(
+                    search_text="*",
+                    filter=f"client_name eq '{location}'",
+                    select=["id", "filename", "location", "client_name", "lease_start_date", 
+                           "lease_end_date", "building_area", "area_unit", "building_type", "processed_at"],
+                    top=100
+                )
+                # Combine results
+                all_results = list(search_results) + list(filtered_results)
+            except:
+                # If filter fails, just use text search results
+                all_results = list(search_results)
+            
             matches = []
-            for result in search_results:
+            for result in all_results:
                 matches.append({
                     "filename": result.get("filename"),
                     "location": result.get("location"),
@@ -219,33 +235,42 @@ class LocationMatchingTool(BaseTool):
                 })
             
             if matches:
-                # Analyze the results
-                analysis = f"Found {len(matches)} lease documents related to '{location}':\n\n"
+                # Group by filename to avoid counting pages as separate documents
+                documents = {}
+                for match in matches:
+                    filename = match.get("filename", "Unknown")
+                    if filename not in documents:
+                        documents[filename] = match  # Take first page data for the document
+                
+                # Analyze the unique documents (not pages)
+                unique_docs = list(documents.values())
+                search_type = "client" if any(location.lower() in doc.get("client_name", "").lower() for doc in unique_docs) else "location/keyword"
+                analysis = f"Found {len(unique_docs)} lease documents matching {search_type} '{location}':\n\n"
                 
                 # Group by client
                 clients = {}
                 total_area = 0
                 building_types = {}
                 
-                for match in matches:
-                    client = match.get("client_name", "Unknown")
+                for doc in unique_docs:
+                    client = doc.get("client_name", "Unknown")
                     if client not in clients:
                         clients[client] = []
-                    clients[client].append(match)
+                    clients[client].append(doc)
                     
-                    # Track building area
-                    area = match.get("building_area")
+                    # Track building area (only once per document)
+                    area = doc.get("building_area")
                     if area and str(area).replace(".", "").replace(",", "").isdigit():
                         total_area += float(str(area).replace(",", ""))
                     
-                    # Track building types
-                    btype = match.get("building_type")
+                    # Track building types (only once per document)
+                    btype = doc.get("building_type")
                     if btype:
                         building_types[btype] = building_types.get(btype, 0) + 1
                 
                 # Detailed analysis
                 analysis += "📊 SUMMARY:\n"
-                analysis += f"• Total documents: {len(matches)}\n"
+                analysis += f"• Total lease documents: {len(unique_docs)} (deduplicated from {len(matches)} pages)\n"
                 analysis += f"• Unique clients: {len(clients)}\n"
                 if total_area > 0:
                     analysis += f"• Total building area: {total_area:,.0f} sq ft\n"
@@ -254,17 +279,17 @@ class LocationMatchingTool(BaseTool):
                 
                 analysis += f"\n📋 DETAILED RESULTS:\n"
                 
-                for client, client_matches in clients.items():
-                    analysis += f"\n🏢 Client: {client}\n"
-                    for match in client_matches[:5]:  # Limit to 5 per client
-                        analysis += f"  • {match.get('filename', 'Unknown file')}\n"
-                        analysis += f"    Location: {match.get('location', 'Not specified')}\n"
-                        if match.get('lease_start_date'):
-                            analysis += f"    Lease: {match.get('lease_start_date')} to {match.get('lease_end_date', 'Unknown')}\n"
-                        if match.get('building_area'):
-                            analysis += f"    Area: {match.get('building_area')} {match.get('area_unit', '')}\n"
-                        if match.get('building_type'):
-                            analysis += f"    Type: {match.get('building_type')}\n"
+                for client, client_docs in clients.items():
+                    analysis += f"\n🏢 Client: {client} ({len(client_docs)} lease documents)\n"
+                    for doc in client_docs:
+                        analysis += f"  • {doc.get('filename', 'Unknown file')}\n"
+                        analysis += f"    Location: {doc.get('location', 'Not specified')}\n"
+                        if doc.get('lease_start_date'):
+                            analysis += f"    Lease: {doc.get('lease_start_date')} to {doc.get('lease_end_date', 'Unknown')}\n"
+                        if doc.get('building_area'):
+                            analysis += f"    Area: {doc.get('building_area')} {doc.get('area_unit', '')}\n"
+                        if doc.get('building_type'):
+                            analysis += f"    Type: {doc.get('building_type')}\n"
                         analysis += "\n"
                 
                 return analysis
@@ -352,18 +377,27 @@ class VectorSearchTool(BaseTool):
                 results.append(doc_data)
             
             if results:
+                # Group by filename to avoid counting pages as separate documents
+                documents = {}
+                for result in results:
+                    filename = result.get("filename", "Unknown")
+                    if filename not in documents:
+                        documents[filename] = result  # Take the highest scoring page for each document
+                
+                unique_docs = list(documents.values())
+                
                 # Provide comprehensive analysis
                 analysis = f"🔍 SEARCH RESULTS for '{query}'\n"
-                analysis += f"Found {len(results)} relevant documents:\n\n"
+                analysis += f"Found {len(unique_docs)} relevant documents (deduplicated from {len(results)} pages):\n\n"
                 
-                # Analyze the data
+                # Analyze the unique documents
                 clients = set()
                 locations = set()
                 building_types = {}
                 total_area = 0
                 lease_dates = []
                 
-                for doc in results:
+                for doc in unique_docs:
                     if doc.get("client_name"):
                         clients.add(doc["client_name"])
                     if doc.get("location"):
@@ -372,7 +406,7 @@ class VectorSearchTool(BaseTool):
                         btype = doc["building_type"]
                         building_types[btype] = building_types.get(btype, 0) + 1
                     
-                    # Parse area
+                    # Parse area (only once per document)
                     area = doc.get("building_area")
                     if area and str(area).replace(".", "").replace(",", "").isdigit():
                         total_area += float(str(area).replace(",", ""))
@@ -388,12 +422,12 @@ class VectorSearchTool(BaseTool):
                 if building_types:
                     analysis += f"• Building types: {', '.join([f'{k} ({v})' for k, v in building_types.items()])}\n"
                 if total_area > 0:
-                    avg_area = total_area / len([r for r in results if r.get("building_area")])
+                    avg_area = total_area / len([doc for doc in unique_docs if doc.get("building_area")])
                     analysis += f"• Total area: {total_area:,.0f} sq ft (avg: {avg_area:,.0f} sq ft)\n"
                 
                 # Top results with detailed info
                 analysis += f"\n📋 TOP MATCHING DOCUMENTS:\n"
-                for i, doc in enumerate(results[:8], 1):
+                for i, doc in enumerate(unique_docs[:8], 1):
                     analysis += f"\n{i}. {doc.get('filename', 'Unknown file')} (Score: {doc['score']:.2f})\n"
                     analysis += f"   Client: {doc.get('client_name', 'Unknown')}\n"
                     analysis += f"   Location: {doc.get('location', 'Not specified')}\n"
@@ -408,7 +442,7 @@ class VectorSearchTool(BaseTool):
                 if fields and any(f != "" for f in fields):
                     analysis += f"\n🎯 REQUESTED FIELDS SUMMARY:\n"
                     for field in fields:
-                        field_values = [doc.get(field) for doc in results if doc.get(field)]
+                        field_values = [doc.get(field) for doc in unique_docs if doc.get(field)]
                         if field_values:
                             unique_values = list(set(field_values))
                             analysis += f"• {field}: {len(unique_values)} unique values\n"
@@ -452,9 +486,9 @@ class LeaseAnalysisTool(BaseTool):
                 top=1000  # Get more documents for analysis
             )
             
-            documents = []
+            all_results = []
             for result in search_results:
-                documents.append({
+                all_results.append({
                     "filename": result.get("filename"),
                     "location": result.get("location"),
                     "client_name": result.get("client_name"),
@@ -465,6 +499,15 @@ class LeaseAnalysisTool(BaseTool):
                     "building_type": result.get("building_type"),
                     "processed_at": result.get("processed_at")
                 })
+            
+            # Group by filename to avoid counting pages as separate documents
+            document_map = {}
+            for result in all_results:
+                filename = result.get("filename", "Unknown")
+                if filename not in document_map:
+                    document_map[filename] = result
+            
+            documents = list(document_map.values())
             
             if not documents:
                 return "No lease documents found in the system. Please upload lease documents first."
@@ -749,7 +792,7 @@ class LeaseDocumentAgent:
         """Create the ReAct agent with custom prompt"""
         
         react_prompt = PromptTemplate.from_template("""
-You are an expert lease document analyst with access to powerful tools for comprehensive lease portfolio analysis. Your role is to provide detailed, actionable insights about lease agreements and portfolios.
+You are an expert lease document analyst with access to powerful tools for comprehensive lease portfolio analysis. You can have normal conversations and provide detailed insights about lease agreements and portfolios.
 
 CORE CAPABILITIES:
 - Azure OCR extraction from PDF documents
@@ -758,8 +801,14 @@ CORE CAPABILITIES:
 - Comprehensive lease portfolio analysis with business insights
 - Document ingestion into searchable vector database
 
+CONVERSATION HANDLING:
+- Handle greetings, simple questions, and casual conversation naturally
+- Only use tools when you need to search, analyze, or process lease documents
+- For questions like "hi", "hello", "how are you", "what can you do" - respond directly without using tools
+- For lease-related queries, use the appropriate tools to gather data
+
 ANALYSIS APPROACH:
-Always provide meaningful analysis, not just raw data. When users ask questions:
+When users ask lease-related questions:
 1. Use appropriate tools to gather comprehensive data
 2. Analyze patterns, trends, and key insights
 3. Provide actionable recommendations
@@ -771,22 +820,26 @@ TOOLS AVAILABLE:
 
 RESPONSE FORMAT:
 Question: the input question you must answer
-Thought: analyze what information the user needs and plan your approach
-Action: the action to take, should be one of [{tool_names}]
-Action Input: the input to the action
-Observation: the result of the action
+Thought: determine if this needs tools or can be answered directly
+Action: [ONLY if needed] the action to take, should be one of [{tool_names}]
+Action Input: [ONLY if using action] the input to the action
+Observation: [ONLY if using action] the result of the action
 ... (this Thought/Action/Action Input/Observation can repeat N times)
 Thought: I now have enough information to provide a comprehensive answer
-Final Answer: provide detailed analysis with insights, not just raw data
+Final Answer: provide a helpful response - either direct conversation or detailed analysis with insights
+
+CONVERSATION EXAMPLES:
+- User: "Hi" → Direct response: "Hello! I'm your lease document analyst..."
+- User: "What can you do?" → Direct response: "I can help you analyze lease documents..."
+- User: "Find leases for client2" → Use tools to search and analyze
+- User: "Thank you" → Direct response: "You're welcome! Let me know if you need anything else..."
 
 IMPORTANT GUIDELINES:
-- Always provide business insights, not just counts or lists
-- Identify trends, risks, and opportunities in lease data
-- Structure your responses with clear sections and key takeaways
-- When discussing lease expirations, highlight renewal risks and opportunities
-- For location analysis, consider market concentrations and geographic risks
-- For client analysis, identify key relationships and portfolio concentrations
-- Always end with actionable recommendations when appropriate
+- Be conversational and helpful for all interactions
+- Only use tools for lease document analysis tasks
+- Always provide business insights for lease queries, not just raw data
+- Structure lease analysis responses with clear sections and key takeaways
+- End with actionable recommendations when appropriate
 
 Begin!
 
