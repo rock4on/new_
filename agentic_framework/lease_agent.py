@@ -65,16 +65,9 @@ class AzureOCRTool(BaseTool):
         try:
             print(f"   🔍 Testing Azure Form Recognizer connection...")
             
-            # Disable SSL warnings
-            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            
-            # Create a transport with SSL verification disabled
-            transport = RequestsTransport(verify=False)
-            
             azure_client = DocumentAnalysisClient(
                 endpoint=azure_endpoint,
-                credential=AzureKeyCredential(azure_key),
-                transport=transport
+                credential=AzureKeyCredential(azure_key)
             )
             
             # Test the connection by checking the service
@@ -769,14 +762,10 @@ class LeaseDocumentAgent:
         try:
             print("🔍 Testing Azure Search connection...")
             
-            # Create transport with SSL verification disabled for Search client
-            search_transport = RequestsTransport(verify=False)
-            
             self.search_client = SearchClient(
                 endpoint=azure_search_endpoint,
                 index_name=search_index_name,
-                credential=AzureKeyCredential(azure_search_key),
-                transport=search_transport
+                credential=AzureKeyCredential(azure_search_key)
             )
             
             # Test connection by trying to get index info
