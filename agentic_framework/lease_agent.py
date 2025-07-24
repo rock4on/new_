@@ -689,77 +689,137 @@ class MatchDataTool(BaseTool):
             return None, f"Error loading Excel file: {e}"
     
     def _fuzzy_search_vector_by_location(self, location: str):
-        """Search vector database for location matches"""
+        """Search vector database for precise location matches"""
         try:
             matches = []
+            location_clean = location.strip().lower()
             
-            # Strategy 1: Exact search in location field
+            # Strategy 1: Exact location field match (case insensitive)
             try:
                 exact_results = self.search_client.search(
                     search_text="*",
-                    filter=f"location eq '{location}'",
+                    filter=f"search.ismatch('{location}', 'location')",
                     select=["id", "filename", "content", "location", "client_name", 
                            "lease_start_date", "lease_end_date", "building_area", 
-                           "area_unit", "building_type", "processed_at"],
-                    top=20
+                           "area_unit", "building_type", "processed_at", "page_no"],
+                    top=50
                 )
                 matches.extend(list(exact_results))
             except:
                 pass
             
-            # Strategy 2: Text search across all fields
+            # Strategy 2: Location field contains search (more precise than full text search)
             try:
-                text_results = self.search_client.search(
-                    search_text=location,
+                location_results = self.search_client.search(
+                    search_text=f"location:{location}",
                     select=["id", "filename", "content", "location", "client_name", 
                            "lease_start_date", "lease_end_date", "building_area", 
-                           "area_unit", "building_type", "processed_at"],
-                    top=20
+                           "area_unit", "building_type", "processed_at", "page_no"],
+                    top=30
                 )
-                matches.extend(list(text_results))
+                matches.extend(list(location_results))
             except:
                 pass
             
-            # Strategy 3: Search for parts of the location
-            location_parts = location.replace(",", " ").split()
-            for part in location_parts:
-                if len(part) > 2:
+            # Strategy 3: Only search for significant location parts (avoid generic terms)
+            location_parts = [part.strip() for part in location.replace(",", " ").split() if len(part.strip()) > 3]
+            for part in location_parts[:2]:  # Only use first 2 significant parts
+                # Skip common generic terms that would cause false matches
+                if part.lower() not in ['the', 'and', 'street', 'road', 'avenue', 'ave', 'st', 'rd', 'blvd', 'city', 'state']:
                     try:
                         part_results = self.search_client.search(
-                            search_text=part,
+                            search_text=f"location:{part}",
                             select=["id", "filename", "content", "location", "client_name", 
                                    "lease_start_date", "lease_end_date", "building_area", 
-                                   "area_unit", "building_type", "processed_at"],
-                            top=10
+                                   "area_unit", "building_type", "processed_at", "page_no"],
+                            top=20
                         )
                         matches.extend(list(part_results))
                     except:
                         pass
             
-            # Remove duplicates
-            unique_matches = {}
+            # Remove duplicates and group by document (handle page duplicates)
+            document_matches = {}
             for result in matches:
-                doc_id = result.get("id")
-                if doc_id and doc_id not in unique_matches:
-                    unique_matches[doc_id] = {
-                        "id": result.get("id"),
-                        "filename": result.get("filename"),
-                        "location": result.get("location"),
-                        "client_name": result.get("client_name"),
-                        "lease_start_date": result.get("lease_start_date"),
-                        "lease_end_date": result.get("lease_end_date"),
-                        "building_area": result.get("building_area"),
-                        "area_unit": result.get("area_unit"),
-                        "building_type": result.get("building_type"),
-                        "processed_at": result.get("processed_at"),
-                        "content_preview": (result.get("content", "")[:100] + "...") if result.get("content") else "",
-                        "search_score": result.get("@search.score", 0)
-                    }
+                filename = result.get("filename", "Unknown")
+                vector_location = result.get("location", "").lower()
+                
+                # Calculate location similarity score
+                similarity_score = self._calculate_location_similarity(location_clean, vector_location)
+                
+                # Only include if there's reasonable location similarity (avoid China/Helsinki mismatches)
+                if similarity_score > 0.3:  # Threshold for location similarity
+                    # Group by filename to handle page duplicates
+                    if filename not in document_matches:
+                        document_matches[filename] = {
+                            "id": result.get("id"),
+                            "filename": filename,
+                            "location": result.get("location"),
+                            "client_name": result.get("client_name"),
+                            "lease_start_date": result.get("lease_start_date"),
+                            "lease_end_date": result.get("lease_end_date"),
+                            "building_area": result.get("building_area"),
+                            "area_unit": result.get("area_unit"),
+                            "building_type": result.get("building_type"),
+                            "processed_at": result.get("processed_at"),
+                            "content_preview": (result.get("content", "")[:100] + "...") if result.get("content") else "",
+                            "search_score": result.get("@search.score", 0),
+                            "location_similarity": similarity_score,
+                            "page_count": 1
+                        }
+                    else:
+                        # If we already have this document, update with best score and increment page count
+                        existing = document_matches[filename]
+                        if result.get("@search.score", 0) > existing["search_score"]:
+                            existing.update({
+                                "id": result.get("id"),
+                                "location": result.get("location"),
+                                "client_name": result.get("client_name"),
+                                "lease_start_date": result.get("lease_start_date"),
+                                "lease_end_date": result.get("lease_end_date"),
+                                "building_area": result.get("building_area"),
+                                "area_unit": result.get("area_unit"),
+                                "building_type": result.get("building_type"),
+                                "processed_at": result.get("processed_at"),
+                                "search_score": result.get("@search.score", 0),
+                                "location_similarity": max(similarity_score, existing["location_similarity"])
+                            })
+                        existing["page_count"] += 1
             
-            return list(unique_matches.values())
+            # Sort by location similarity and search score
+            sorted_matches = sorted(
+                document_matches.values(), 
+                key=lambda x: (x["location_similarity"], x["search_score"]), 
+                reverse=True
+            )
+            
+            return sorted_matches
             
         except Exception as e:
+            print(f"   ❌ Error in location search: {e}")
             return []
+    
+    def _calculate_location_similarity(self, location1: str, location2: str) -> float:
+        """Calculate similarity between two location strings"""
+        if not location1 or not location2:
+            return 0.0
+        
+        loc1_parts = set(location1.lower().replace(",", " ").split())
+        loc2_parts = set(location2.lower().replace(",", " ").split())
+        
+        # Remove common stop words
+        stop_words = {'the', 'and', 'of', 'in', 'at', 'to', 'for', 'on', 'with'}
+        loc1_parts = loc1_parts - stop_words
+        loc2_parts = loc2_parts - stop_words
+        
+        if not loc1_parts or not loc2_parts:
+            return 0.0
+        
+        # Calculate Jaccard similarity
+        intersection = len(loc1_parts.intersection(loc2_parts))
+        union = len(loc1_parts.union(loc2_parts))
+        
+        return intersection / union if union > 0 else 0.0
     
     def _run(self, input_data: str) -> str:
         """Match Excel data with vector database data"""
@@ -848,11 +908,13 @@ class MatchDataTool(BaseTool):
                 if result['matches']:
                     response += f"Vector Matches ({result['vector_matches']}):\n"
                     for i, match in enumerate(result['matches'], 1):
-                        response += f"  {i}. {match['filename']} (Score: {match['search_score']:.2f})\n"
-                        response += f"     Location: {match['location']}\n"
+                        response += f"  {i}. {match['filename']} (Similarity: {match['location_similarity']:.2f}, Score: {match['search_score']:.2f})\n"
+                        response += f"     Vector Location: {match['location']}\n"
                         response += f"     Client: {match['client_name']}\n"
                         if match['lease_start_date']:
                             response += f"     Lease: {match['lease_start_date']} - {match['lease_end_date']}\n"
+                        if match.get('page_count', 1) > 1:
+                            response += f"     Pages: {match['page_count']} (deduplicated)\n"
                 else:
                     response += f"❌ No vector matches found\n"
             
