@@ -689,71 +689,69 @@ class MatchDataTool(BaseTool):
             return None, f"Error loading Excel file: {e}"
     
     def _fuzzy_search_vector_by_location(self, location: str):
-        """Search vector database for precise location matches"""
+        """Search vector database using same logic as LocationMatchingTool"""
         try:
-            matches = []
+            # Use the SAME search logic as LocationMatchingTool that works for Helsinki
+            # Strategy 1: Simple text search across all fields (this is what works!)
+            search_results = self.search_client.search(
+                search_text=f"{location}",
+                select=["id", "filename", "content", "location", "client_name", 
+                       "lease_start_date", "lease_end_date", "building_area", 
+                       "area_unit", "building_type", "processed_at", "page_no"],
+                top=100
+            )
+            
+            # Strategy 2: Also try filter-based search for exact client matches
+            try:
+                filtered_results = self.search_client.search(
+                    search_text="*",
+                    filter=f"client_name eq '{location}'",
+                    select=["id", "filename", "content", "location", "client_name", 
+                           "lease_start_date", "lease_end_date", "building_area", 
+                           "area_unit", "building_type", "processed_at", "page_no"],
+                    top=100
+                )
+                # Combine results
+                all_results = list(search_results) + list(filtered_results)
+            except:
+                # If filter fails, just use text search results
+                all_results = list(search_results)
+            
+            # Group by document (handle page duplicates) and calculate similarity
+            document_matches = {}
             location_clean = location.strip().lower()
             
-            # Strategy 1: Exact location field match (case insensitive)
-            try:
-                exact_results = self.search_client.search(
-                    search_text="*",
-                    filter=f"search.ismatch('{location}', 'location')",
-                    select=["id", "filename", "content", "location", "client_name", 
-                           "lease_start_date", "lease_end_date", "building_area", 
-                           "area_unit", "building_type", "processed_at", "page_no"],
-                    top=50
-                )
-                matches.extend(list(exact_results))
-            except:
-                pass
-            
-            # Strategy 2: Location field contains search (more precise than full text search)
-            try:
-                location_results = self.search_client.search(
-                    search_text=f"location:{location}",
-                    select=["id", "filename", "content", "location", "client_name", 
-                           "lease_start_date", "lease_end_date", "building_area", 
-                           "area_unit", "building_type", "processed_at", "page_no"],
-                    top=30
-                )
-                matches.extend(list(location_results))
-            except:
-                pass
-            
-            # Strategy 3: Only search for significant location parts (avoid generic terms)
-            location_parts = [part.strip() for part in location.replace(",", " ").split() if len(part.strip()) > 3]
-            for part in location_parts[:2]:  # Only use first 2 significant parts
-                # Skip common generic terms that would cause false matches
-                if part.lower() not in ['the', 'and', 'street', 'road', 'avenue', 'ave', 'st', 'rd', 'blvd', 'city', 'state']:
-                    try:
-                        part_results = self.search_client.search(
-                            search_text=f"location:{part}",
-                            select=["id", "filename", "content", "location", "client_name", 
-                                   "lease_start_date", "lease_end_date", "building_area", 
-                                   "area_unit", "building_type", "processed_at", "page_no"],
-                            top=20
-                        )
-                        matches.extend(list(part_results))
-                    except:
-                        pass
-            
-            # Remove duplicates and group by document (handle page duplicates)
-            document_matches = {}
-            for result in matches:
+            for result in all_results:
                 filename = result.get("filename", "Unknown")
                 vector_location = result.get("location", "").lower()
                 
                 # Calculate location similarity score
                 similarity_score = self._calculate_location_similarity(location_clean, vector_location)
                 
-                # Only include if there's reasonable location similarity (avoid China/Helsinki mismatches)
-                if similarity_score > 0.3:  # Threshold for location similarity
-                    # Group by filename to handle page duplicates
-                    if filename not in document_matches:
-                        document_matches[filename] = {
+                # Group by filename to handle page duplicates
+                if filename not in document_matches:
+                    document_matches[filename] = {
+                        "id": result.get("id"),
+                        "filename": filename,
+                        "location": result.get("location"),
+                        "client_name": result.get("client_name"),
+                        "lease_start_date": result.get("lease_start_date"),
+                        "lease_end_date": result.get("lease_end_date"),
+                        "building_area": result.get("building_area"),
+                        "area_unit": result.get("area_unit"),
+                        "building_type": result.get("building_type"),
+                        "processed_at": result.get("processed_at"),
+                        "content_preview": (result.get("content", "")[:100] + "...") if result.get("content") else "",
+                        "search_score": result.get("@search.score", 0),
+                        "location_similarity": similarity_score,
+                        "page_count": 1
+                    }
+                else:
+                    # If we already have this document, update with best score and increment page count
+                    existing = document_matches[filename]
+                    if result.get("@search.score", 0) > existing["search_score"]:
+                        existing.update({
                             "id": result.get("id"),
-                            "filename": filename,
                             "location": result.get("location"),
                             "client_name": result.get("client_name"),
                             "lease_start_date": result.get("lease_start_date"),
@@ -762,34 +760,15 @@ class MatchDataTool(BaseTool):
                             "area_unit": result.get("area_unit"),
                             "building_type": result.get("building_type"),
                             "processed_at": result.get("processed_at"),
-                            "content_preview": (result.get("content", "")[:100] + "...") if result.get("content") else "",
                             "search_score": result.get("@search.score", 0),
-                            "location_similarity": similarity_score,
-                            "page_count": 1
-                        }
-                    else:
-                        # If we already have this document, update with best score and increment page count
-                        existing = document_matches[filename]
-                        if result.get("@search.score", 0) > existing["search_score"]:
-                            existing.update({
-                                "id": result.get("id"),
-                                "location": result.get("location"),
-                                "client_name": result.get("client_name"),
-                                "lease_start_date": result.get("lease_start_date"),
-                                "lease_end_date": result.get("lease_end_date"),
-                                "building_area": result.get("building_area"),
-                                "area_unit": result.get("area_unit"),
-                                "building_type": result.get("building_type"),
-                                "processed_at": result.get("processed_at"),
-                                "search_score": result.get("@search.score", 0),
-                                "location_similarity": max(similarity_score, existing["location_similarity"])
-                            })
-                        existing["page_count"] += 1
+                            "location_similarity": max(similarity_score, existing["location_similarity"])
+                        })
+                    existing["page_count"] += 1
             
-            # Sort by location similarity and search score
+            # Sort by search score first (same as LocationMatchingTool), then location similarity
             sorted_matches = sorted(
                 document_matches.values(), 
-                key=lambda x: (x["location_similarity"], x["search_score"]), 
+                key=lambda x: (x["search_score"], x["location_similarity"]), 
                 reverse=True
             )
             
