@@ -717,60 +717,33 @@ class MatchDataTool(BaseTool):
                 # If filter fails, just use text search results
                 all_results = list(search_results)
             
-            # Group by document (handle page duplicates) and calculate similarity
-            document_matches = {}
-            location_clean = location.strip().lower()
-            
+            # Use EXACT same logic as LocationMatchingTool
+            matches = []
             for result in all_results:
-                filename = result.get("filename", "Unknown")
-                vector_location = result.get("location", "").lower()
-                
-                # Calculate location similarity score
-                similarity_score = self._calculate_location_similarity(location_clean, vector_location)
-                
-                # Group by filename to handle page duplicates
-                if filename not in document_matches:
-                    document_matches[filename] = {
-                        "id": result.get("id"),
-                        "filename": filename,
-                        "location": result.get("location"),
-                        "client_name": result.get("client_name"),
-                        "lease_start_date": result.get("lease_start_date"),
-                        "lease_end_date": result.get("lease_end_date"),
-                        "building_area": result.get("building_area"),
-                        "area_unit": result.get("area_unit"),
-                        "building_type": result.get("building_type"),
-                        "processed_at": result.get("processed_at"),
-                        "content_preview": (result.get("content", "")[:100] + "...") if result.get("content") else "",
-                        "search_score": result.get("@search.score", 0),
-                        "location_similarity": similarity_score,
-                        "page_count": 1
-                    }
-                else:
-                    # If we already have this document, update with best score and increment page count
-                    existing = document_matches[filename]
-                    if result.get("@search.score", 0) > existing["search_score"]:
-                        existing.update({
-                            "id": result.get("id"),
-                            "location": result.get("location"),
-                            "client_name": result.get("client_name"),
-                            "lease_start_date": result.get("lease_start_date"),
-                            "lease_end_date": result.get("lease_end_date"),
-                            "building_area": result.get("building_area"),
-                            "area_unit": result.get("area_unit"),
-                            "building_type": result.get("building_type"),
-                            "processed_at": result.get("processed_at"),
-                            "search_score": result.get("@search.score", 0),
-                            "location_similarity": max(similarity_score, existing["location_similarity"])
-                        })
-                    existing["page_count"] += 1
+                matches.append({
+                    "id": result.get("id"),
+                    "filename": result.get("filename"),
+                    "location": result.get("location"),
+                    "client_name": result.get("client_name"),
+                    "lease_start_date": result.get("lease_start_date"),
+                    "lease_end_date": result.get("lease_end_date"),
+                    "building_area": result.get("building_area"),
+                    "area_unit": result.get("area_unit"),
+                    "building_type": result.get("building_type"),
+                    "processed_at": result.get("processed_at"),
+                    "content_preview": (result.get("content", "")[:100] + "...") if result.get("content") else "",
+                    "search_score": result.get("@search.score", 0)
+                })
             
-            # Sort by search score first (same as LocationMatchingTool), then location similarity
-            sorted_matches = sorted(
-                document_matches.values(), 
-                key=lambda x: (x["search_score"], x["location_similarity"]), 
-                reverse=True
-            )
+            # Group by filename to avoid counting pages as separate documents (EXACT same logic)
+            documents = {}
+            for match in matches:
+                filename = match.get("filename", "Unknown")
+                if filename not in documents:
+                    documents[filename] = match  # Take first page data for the document (SAME AS LocationMatchingTool)
+            
+            # Return the unique documents (not pages)
+            sorted_matches = list(documents.values())
             
             return sorted_matches
             
@@ -778,36 +751,13 @@ class MatchDataTool(BaseTool):
             print(f"   ❌ Error in location search: {e}")
             return []
     
-    def _calculate_location_similarity(self, location1: str, location2: str) -> float:
-        """Calculate similarity between two location strings"""
-        if not location1 or not location2:
-            return 0.0
-        
-        loc1_parts = set(location1.lower().replace(",", " ").split())
-        loc2_parts = set(location2.lower().replace(",", " ").split())
-        
-        # Remove common stop words
-        stop_words = {'the', 'and', 'of', 'in', 'at', 'to', 'for', 'on', 'with'}
-        loc1_parts = loc1_parts - stop_words
-        loc2_parts = loc2_parts - stop_words
-        
-        if not loc1_parts or not loc2_parts:
-            return 0.0
-        
-        # Calculate Jaccard similarity
-        intersection = len(loc1_parts.intersection(loc2_parts))
-        union = len(loc1_parts.union(loc2_parts))
-        
-        return intersection / union if union > 0 else 0.0
     
     def _run(self, input_data: str) -> str:
-        """Match Excel data with vector database data"""
+        """Match Excel data with vector database data by searching column 2 locations"""
         try:
             # Parse input JSON
             data = json.loads(input_data)
             excel_path = data.get('excel_path', 'EGA.xlsx')
-            location_column = data.get('location_column', 'location')
-            column_2 = data.get('column_2', None)
             
             # Load Excel data
             import pandas as pd
@@ -819,54 +769,57 @@ class MatchDataTool(BaseTool):
             if excel_df.empty:
                 return f"❌ Excel file '{excel_path}' is empty"
             
-            # Auto-detect location column if not found
-            if location_column not in excel_df.columns:
-                location_candidates = ["location", "Location", "LOCATION", "address", "Address", 
-                                     "city", "City", "place", "Place"]
-                for candidate in location_candidates:
-                    if candidate in excel_df.columns:
-                        location_column = candidate
-                        break
-                else:
-                    location_column = excel_df.columns[0]
+            if len(excel_df.columns) < 2:
+                return f"❌ Excel file needs at least 2 columns. Found: {list(excel_df.columns)}"
             
-            # Auto-detect column 2 if not specified
-            if column_2 is None and len(excel_df.columns) > 1:
-                column_2 = excel_df.columns[1]
+            # Use column 2 (index 1) as the location to search for
+            column_2 = excel_df.columns[1]
             
             print(f"   📊 Processing Excel file: {excel_path}")
-            print(f"   📍 Location column: {location_column}")
-            if column_2:
-                print(f"   📋 Column 2: {column_2}")
+            print(f"   🔍 Searching using column 2: {column_2}")
             
-            # Process each row
+            # Process each row - extract column 2 and do location search
             results = []
             total_matches = 0
             matched_rows = 0
             
             for index, row in excel_df.iterrows():
-                location = str(row[location_column]) if pd.notna(row[location_column]) else ""
-                column_2_value = str(row[column_2]) if column_2 and pd.notna(row[column_2]) else ""
+                # Get all row data for display
+                row_data = dict(row)
                 
-                if not location:
+                # Extract location from column 2 to search with
+                search_location = str(row[column_2]) if pd.notna(row[column_2]) else ""
+                
+                if not search_location.strip():
+                    results.append({
+                        "excel_row": index + 1,
+                        "search_location": search_location,
+                        "excel_data": row_data,
+                        "vector_matches": 0,
+                        "matches": []
+                    })
                     continue
                 
-                # Search vector database
-                vector_matches = self._fuzzy_search_vector_by_location(location)
+                print(f"   🔍 Row {index + 1}: Searching for '{search_location}'")
+                
+                # Do location search using the same logic as LocationMatchingTool
+                vector_matches = self._fuzzy_search_vector_by_location(search_location)
                 
                 if vector_matches:
                     matched_rows += 1
                     total_matches += len(vector_matches)
+                    print(f"      ✅ Found {len(vector_matches)} matches")
+                else:
+                    print(f"      ❌ No matches found")
                 
                 # Store result
-                result_entry = {
+                results.append({
                     "excel_row": index + 1,
-                    "location": location,
-                    "column_2": column_2_value,
+                    "search_location": search_location,
+                    "excel_data": row_data,
                     "vector_matches": len(vector_matches),
-                    "matches": vector_matches[:3]  # Top 3 matches for display
-                }
-                results.append(result_entry)
+                    "matches": vector_matches[:5]  # Top 5 matches for display
+                })
             
             # Format response
             response = f"📊 MATCH DATA RESULTS\n"
@@ -880,20 +833,19 @@ class MatchDataTool(BaseTool):
             response += f"📋 DETAILED RESULTS:\n"
             for result in results[:10]:  # Show first 10 results
                 response += f"\n--- Row {result['excel_row']} ---\n"
-                response += f"Excel Location: {result['location']}\n"
-                if result['column_2']:
-                    response += f"Column 2: {result['column_2']}\n"
+                response += f"🔍 Searched for: '{result['search_location']}'\n"
+                response += f"📊 Excel Data: {dict(list(result['excel_data'].items())[:3])}{'...' if len(result['excel_data']) > 3 else ''}\n"
                 
                 if result['matches']:
-                    response += f"Vector Matches ({result['vector_matches']}):\n"
+                    response += f"✅ Vector Matches ({result['vector_matches']}):\n"
                     for i, match in enumerate(result['matches'], 1):
-                        response += f"  {i}. {match['filename']} (Similarity: {match['location_similarity']:.2f}, Score: {match['search_score']:.2f})\n"
-                        response += f"     Vector Location: {match['location']}\n"
+                        response += f"  {i}. {match['filename']} (Score: {match['search_score']:.2f})\n"
+                        response += f"     Location: {match['location']}\n"
                         response += f"     Client: {match['client_name']}\n"
                         if match['lease_start_date']:
                             response += f"     Lease: {match['lease_start_date']} - {match['lease_end_date']}\n"
-                        if match.get('page_count', 1) > 1:
-                            response += f"     Pages: {match['page_count']} (deduplicated)\n"
+                        if match['building_area']:
+                            response += f"     Area: {match['building_area']} {match.get('area_unit', '')}\n"
                 else:
                     response += f"❌ No vector matches found\n"
             
@@ -903,7 +855,7 @@ class MatchDataTool(BaseTool):
             return response
             
         except json.JSONDecodeError:
-            return "❌ Error: Invalid JSON input format. Use: {'excel_path': 'EGA.xlsx', 'location_column': 'location'}"
+            return "❌ Error: Invalid JSON input format. Use: {'excel_path': 'EGA.xlsx'}"
         except Exception as e:
             return f"❌ Error matching data: {str(e)}"
 
