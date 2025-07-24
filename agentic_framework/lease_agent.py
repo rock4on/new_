@@ -668,6 +668,205 @@ class LeaseAnalysisTool(BaseTool):
             return f"Error performing lease analysis: {str(e)}"
 
 
+class MatchDataTool(BaseTool):
+    """Tool for matching Excel data with vector database data based on location"""
+    
+    name: str = "match_data"
+    description: str = "Matches data from EGA.xlsx with vector database entries based on location. Input should be JSON with 'excel_path' (path to Excel file), optional 'location_column' (default: auto-detect), and optional 'column_2' (default: second column)."
+    search_client: Any = Field(default=None, exclude=True)
+    
+    def __init__(self, search_client: SearchClient, **kwargs):
+        super().__init__(**kwargs)
+        object.__setattr__(self, 'search_client', search_client)
+    
+    def _load_excel_data(self, excel_path: str):
+        """Load data from Excel file"""
+        try:
+            import pandas as pd
+            df = pd.read_excel(excel_path)
+            return df
+        except Exception as e:
+            return None, f"Error loading Excel file: {e}"
+    
+    def _fuzzy_search_vector_by_location(self, location: str):
+        """Search vector database for location matches"""
+        try:
+            matches = []
+            
+            # Strategy 1: Exact search in location field
+            try:
+                exact_results = self.search_client.search(
+                    search_text="*",
+                    filter=f"location eq '{location}'",
+                    select=["id", "filename", "content", "location", "client_name", 
+                           "lease_start_date", "lease_end_date", "building_area", 
+                           "area_unit", "building_type", "processed_at"],
+                    top=20
+                )
+                matches.extend(list(exact_results))
+            except:
+                pass
+            
+            # Strategy 2: Text search across all fields
+            try:
+                text_results = self.search_client.search(
+                    search_text=location,
+                    select=["id", "filename", "content", "location", "client_name", 
+                           "lease_start_date", "lease_end_date", "building_area", 
+                           "area_unit", "building_type", "processed_at"],
+                    top=20
+                )
+                matches.extend(list(text_results))
+            except:
+                pass
+            
+            # Strategy 3: Search for parts of the location
+            location_parts = location.replace(",", " ").split()
+            for part in location_parts:
+                if len(part) > 2:
+                    try:
+                        part_results = self.search_client.search(
+                            search_text=part,
+                            select=["id", "filename", "content", "location", "client_name", 
+                                   "lease_start_date", "lease_end_date", "building_area", 
+                                   "area_unit", "building_type", "processed_at"],
+                            top=10
+                        )
+                        matches.extend(list(part_results))
+                    except:
+                        pass
+            
+            # Remove duplicates
+            unique_matches = {}
+            for result in matches:
+                doc_id = result.get("id")
+                if doc_id and doc_id not in unique_matches:
+                    unique_matches[doc_id] = {
+                        "id": result.get("id"),
+                        "filename": result.get("filename"),
+                        "location": result.get("location"),
+                        "client_name": result.get("client_name"),
+                        "lease_start_date": result.get("lease_start_date"),
+                        "lease_end_date": result.get("lease_end_date"),
+                        "building_area": result.get("building_area"),
+                        "area_unit": result.get("area_unit"),
+                        "building_type": result.get("building_type"),
+                        "processed_at": result.get("processed_at"),
+                        "content_preview": (result.get("content", "")[:100] + "...") if result.get("content") else "",
+                        "search_score": result.get("@search.score", 0)
+                    }
+            
+            return list(unique_matches.values())
+            
+        except Exception as e:
+            return []
+    
+    def _run(self, input_data: str) -> str:
+        """Match Excel data with vector database data"""
+        try:
+            # Parse input JSON
+            data = json.loads(input_data)
+            excel_path = data.get('excel_path', 'EGA.xlsx')
+            location_column = data.get('location_column', 'location')
+            column_2 = data.get('column_2', None)
+            
+            # Load Excel data
+            import pandas as pd
+            try:
+                excel_df = pd.read_excel(excel_path)
+            except Exception as e:
+                return f"❌ Error loading Excel file '{excel_path}': {e}"
+            
+            if excel_df.empty:
+                return f"❌ Excel file '{excel_path}' is empty"
+            
+            # Auto-detect location column if not found
+            if location_column not in excel_df.columns:
+                location_candidates = ["location", "Location", "LOCATION", "address", "Address", 
+                                     "city", "City", "place", "Place"]
+                for candidate in location_candidates:
+                    if candidate in excel_df.columns:
+                        location_column = candidate
+                        break
+                else:
+                    location_column = excel_df.columns[0]
+            
+            # Auto-detect column 2 if not specified
+            if column_2 is None and len(excel_df.columns) > 1:
+                column_2 = excel_df.columns[1]
+            
+            print(f"   📊 Processing Excel file: {excel_path}")
+            print(f"   📍 Location column: {location_column}")
+            if column_2:
+                print(f"   📋 Column 2: {column_2}")
+            
+            # Process each row
+            results = []
+            total_matches = 0
+            matched_rows = 0
+            
+            for index, row in excel_df.iterrows():
+                location = str(row[location_column]) if pd.notna(row[location_column]) else ""
+                column_2_value = str(row[column_2]) if column_2 and pd.notna(row[column_2]) else ""
+                
+                if not location:
+                    continue
+                
+                # Search vector database
+                vector_matches = self._fuzzy_search_vector_by_location(location)
+                
+                if vector_matches:
+                    matched_rows += 1
+                    total_matches += len(vector_matches)
+                
+                # Store result
+                result_entry = {
+                    "excel_row": index + 1,
+                    "location": location,
+                    "column_2": column_2_value,
+                    "vector_matches": len(vector_matches),
+                    "matches": vector_matches[:3]  # Top 3 matches for display
+                }
+                results.append(result_entry)
+            
+            # Format response
+            response = f"📊 MATCH DATA RESULTS\n"
+            response += f"{'='*50}\n\n"
+            response += f"📈 SUMMARY:\n"
+            response += f"   Excel rows processed: {len(results)}\n"
+            response += f"   Rows with vector matches: {matched_rows}\n"
+            response += f"   Total vector matches: {total_matches}\n"
+            response += f"   Match rate: {(matched_rows/len(results)*100):.1f}%\n\n"
+            
+            response += f"📋 DETAILED RESULTS:\n"
+            for result in results[:10]:  # Show first 10 results
+                response += f"\n--- Row {result['excel_row']} ---\n"
+                response += f"Excel Location: {result['location']}\n"
+                if result['column_2']:
+                    response += f"Column 2: {result['column_2']}\n"
+                
+                if result['matches']:
+                    response += f"Vector Matches ({result['vector_matches']}):\n"
+                    for i, match in enumerate(result['matches'], 1):
+                        response += f"  {i}. {match['filename']} (Score: {match['search_score']:.2f})\n"
+                        response += f"     Location: {match['location']}\n"
+                        response += f"     Client: {match['client_name']}\n"
+                        if match['lease_start_date']:
+                            response += f"     Lease: {match['lease_start_date']} - {match['lease_end_date']}\n"
+                else:
+                    response += f"❌ No vector matches found\n"
+            
+            if len(results) > 10:
+                response += f"\n... and {len(results) - 10} more rows\n"
+            
+            return response
+            
+        except json.JSONDecodeError:
+            return "❌ Error: Invalid JSON input format. Use: {'excel_path': 'EGA.xlsx', 'location_column': 'location'}"
+        except Exception as e:
+            return f"❌ Error matching data: {str(e)}"
+
+
 class BatchIngestionTool(BaseTool):
     """Tool for batch ingesting all PDF documents from the default folder"""
     
@@ -804,6 +1003,7 @@ class LeaseDocumentAgent:
                     embedding_model=self.embedding_model
                 ),
                 LeaseAnalysisTool(search_client=self.search_client),
+                MatchDataTool(search_client=self.search_client),
                 BatchIngestionTool(agent_instance=self)
             ]
             print(f"✅ Initialized {len(self.tools)} tools successfully")
