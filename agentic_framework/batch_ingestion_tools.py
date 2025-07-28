@@ -73,6 +73,82 @@ class BatchIngestElectricTool(BaseTool):
         super().__init__(**kwargs)
         object.__setattr__(self, 'agent_instance', agent_instance)
     
+    def _batch_ingest_utilities_pdfs(self, folder_path: str, client_name: str = None, utility_type: str = "auto") -> Dict[str, Any]:
+        """Batch process utilities PDFs using process_utilities_document instead of process_document"""
+        folder = Path(folder_path)
+        
+        if not folder.exists():
+            return {
+                "status": "error",
+                "error": f"Folder does not exist: {folder_path}",
+                "results": []
+            }
+        
+        # Find all PDF files recursively
+        pdf_files = list(folder.rglob("*.pdf"))
+        
+        if not pdf_files:
+            return {
+                "status": "warning",
+                "message": f"No PDF files found in folder: {folder_path}",
+                "results": []
+            }
+        
+        print(f"📁 Found {len(pdf_files)} utilities PDF files to process in {folder_path}")
+        
+        results = []
+        successful = 0
+        failed = 0
+        
+        for pdf_file in pdf_files:
+            print(f"\n📄 Processing utilities document: {pdf_file.name}")
+            
+            # Determine client name from folder structure if not provided
+            effective_client_name = client_name
+            if not effective_client_name:
+                if pdf_file.parent.name != folder.name:
+                    effective_client_name = pdf_file.parent.name
+                else:
+                    effective_client_name = "Unknown"
+            
+            try:
+                # Use process_utilities_document instead of process_document!
+                result = self.agent_instance.process_utilities_document(
+                    file_path=str(pdf_file),
+                    utility_type=utility_type,
+                    client_name=effective_client_name
+                )
+                
+                results.append(result)
+                
+                if result["status"] == "success":
+                    successful += 1
+                    print(f"   ✅ Successfully processed utilities document {pdf_file.name}")
+                else:
+                    failed += 1
+                    print(f"   ❌ Failed to process utilities document {pdf_file.name}: {result.get('error', 'Unknown error')}")
+                    
+            except Exception as e:
+                failed += 1
+                error_result = {
+                    "status": "error",
+                    "file_path": str(pdf_file),
+                    "client_name": effective_client_name,
+                    "utility_type": utility_type,
+                    "error": str(e)
+                }
+                results.append(error_result)
+                print(f"   ❌ Exception processing utilities document {pdf_file.name}: {e}")
+        
+        return {
+            "status": "completed" if failed == 0 else "partial_success" if successful > 0 else "failed",
+            "folder_path": str(folder_path),
+            "total_files": len(pdf_files),
+            "successful": successful,
+            "failed": failed,
+            "results": results
+        }
+    
     def _run(self, input_data: str = "{}") -> str:
         """Run batch ingestion of all electric PDFs in /electric folder"""
         try:
@@ -90,10 +166,11 @@ class BatchIngestElectricTool(BaseTool):
             # Set specific folder path for electric documents
             electric_folder = Path("./electric")
             
-            # Call the agent's batch_ingest_pdfs method with specific folder
-            result = self.agent_instance.batch_ingest_pdfs(
+            # Use custom utilities batch processing instead of generic batch_ingest_pdfs
+            result = self._batch_ingest_utilities_pdfs(
                 folder_path=str(electric_folder), 
-                client_name=client_name
+                client_name=client_name,
+                utility_type="electricity"
             )
             
             # Format response for the agent
@@ -123,6 +200,82 @@ class BatchIngestNaturalGasTool(BaseTool):
         super().__init__(**kwargs)
         object.__setattr__(self, 'agent_instance', agent_instance)
     
+    def _batch_ingest_utilities_pdfs(self, folder_path: str, client_name: str = None, utility_type: str = "auto") -> Dict[str, Any]:
+        """Batch process utilities PDFs using process_utilities_document instead of process_document"""
+        folder = Path(folder_path)
+        
+        if not folder.exists():
+            return {
+                "status": "error",
+                "error": f"Folder does not exist: {folder_path}",
+                "results": []
+            }
+        
+        # Find all PDF files recursively
+        pdf_files = list(folder.rglob("*.pdf"))
+        
+        if not pdf_files:
+            return {
+                "status": "warning",
+                "message": f"No PDF files found in folder: {folder_path}",
+                "results": []
+            }
+        
+        print(f"📁 Found {len(pdf_files)} utilities PDF files to process in {folder_path}")
+        
+        results = []
+        successful = 0
+        failed = 0
+        
+        for pdf_file in pdf_files:
+            print(f"\n📄 Processing utilities document: {pdf_file.name}")
+            
+            # Determine client name from folder structure if not provided
+            effective_client_name = client_name
+            if not effective_client_name:
+                if pdf_file.parent.name != folder.name:
+                    effective_client_name = pdf_file.parent.name
+                else:
+                    effective_client_name = "Unknown"
+            
+            try:
+                # Use process_utilities_document instead of process_document!
+                result = self.agent_instance.process_utilities_document(
+                    file_path=str(pdf_file),
+                    utility_type=utility_type,
+                    client_name=effective_client_name
+                )
+                
+                results.append(result)
+                
+                if result["status"] == "success":
+                    successful += 1
+                    print(f"   ✅ Successfully processed utilities document {pdf_file.name}")
+                else:
+                    failed += 1
+                    print(f"   ❌ Failed to process utilities document {pdf_file.name}: {result.get('error', 'Unknown error')}")
+                    
+            except Exception as e:
+                failed += 1
+                error_result = {
+                    "status": "error",
+                    "file_path": str(pdf_file),
+                    "client_name": effective_client_name,
+                    "utility_type": utility_type,
+                    "error": str(e)
+                }
+                results.append(error_result)
+                print(f"   ❌ Exception processing utilities document {pdf_file.name}: {e}")
+        
+        return {
+            "status": "completed" if failed == 0 else "partial_success" if successful > 0 else "failed",
+            "folder_path": str(folder_path),
+            "total_files": len(pdf_files),
+            "successful": successful,
+            "failed": failed,
+            "results": results
+        }
+    
     def _run(self, input_data: str = "{}") -> str:
         """Run batch ingestion of all natural gas PDFs in /natural_gas folder"""
         try:
@@ -140,10 +293,11 @@ class BatchIngestNaturalGasTool(BaseTool):
             # Set specific folder path for natural gas documents
             natural_gas_folder = Path("./natural_gas")
             
-            # Call the agent's batch_ingest_pdfs method with specific folder
-            result = self.agent_instance.batch_ingest_pdfs(
+            # Use custom utilities batch processing instead of generic batch_ingest_pdfs
+            result = self._batch_ingest_utilities_pdfs(
                 folder_path=str(natural_gas_folder), 
-                client_name=client_name
+                client_name=client_name,
+                utility_type="natural_gas"
             )
             
             # Format response for the agent
