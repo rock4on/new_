@@ -39,6 +39,10 @@ import urllib3
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
+# Import utilities models and agent factory
+from utilities_models import NaturalGas_Electricity_Information, UTILITIES_FIELDS
+from utilities_agent import create_utilities_tools, UtilitiesAnalysisTool
+
 
 class LeaseInformation(BaseModel):
     """Pydantic model for structured lease information"""
@@ -999,6 +1003,16 @@ class LeaseDocumentAgent:
                 MatchDataTool(search_client=self.search_client),
                 BatchIngestionTool(agent_instance=self)
             ]
+            
+            # Add utilities tools
+            utilities_tools = create_utilities_tools(
+                azure_endpoint=azure_endpoint,
+                azure_key=azure_key,
+                openai_client=self.openai_client,
+                search_client=self.search_client,
+                embedding_model=self.embedding_model
+            )
+            self.tools.extend(utilities_tools)
             print(f"✅ Initialized {len(self.tools)} tools successfully")
             
         except Exception as e:
@@ -1041,13 +1055,14 @@ class LeaseDocumentAgent:
         """Create the ReAct agent with custom prompt"""
         
         react_prompt = PromptTemplate.from_template("""
-You are an expert lease document analyst. You can have conversations and use tools to analyze lease documents.
+You are an expert document analyst specializing in lease documents and utilities data (natural gas and electricity). You can have conversations and use tools to analyze lease documents, natural gas invoices, and electricity bills.
 
 Available tools: {tools}
 
 IMPORTANT: Always follow this exact format:
 - For simple conversations (greetings, questions about capabilities): Use "Final Answer:" directly
 - For lease analysis (searching, analyzing data): Use "Action:" with a tool, then "Final Answer:" with your analysis
+- For utilities analysis (natural gas/electricity documents): Use utilities-specific tools like "utilities_location_matcher" or "utilities_vector_search_fields"
 - For batch ingestion (processing PDF files): Use "batch_ingest" tool to automatically discover and process all PDFs
 
 Examples:
@@ -1074,6 +1089,15 @@ Action Input: client2
 Observation: [search results]
 Thought: Now I can analyze the results.
 Final Answer: [detailed analysis of client2's leases]
+
+Utilities analysis:
+Question: Find natural gas consumption for Chicago
+Thought: I need to search for utilities documents related to Chicago.
+Action: utilities_location_matcher
+Action Input: Chicago
+Observation: [utilities search results]
+Thought: Now I can analyze the utilities data.
+Final Answer: [detailed analysis of Chicago's natural gas and electricity consumption]
 
 You have access to these tools: {tool_names}
 
@@ -1186,13 +1210,15 @@ Thought: {agent_scratchpad}
                 return {
                     "status": "success",
                     "question": question,
-                    "result": "Hello! I'm your lease document analyst. I can help you search, analyze, and get insights from your lease documents. What would you like to know about your lease portfolio?"
+                    "result": "Hello! I'm your document analyst for lease documents and utilities data. I can help you search, analyze, and get insights from your lease documents, natural gas bills, and electricity invoices. What would you like to know?"
                 }
             elif any(capability in question_lower for capability in ['what can you do', 'help', 'what do you do']):
                 return {
                     "status": "success", 
                     "question": question,
-                    "result": """I can help you with comprehensive lease document analysis including:
+                    "result": """I can help you with comprehensive document analysis including:
+
+LEASE DOCUMENTS:
 • Finding leases by client name or location
 • Analyzing lease portfolios for insights and trends  
 • Tracking lease expirations and renewal opportunities
@@ -1200,11 +1226,25 @@ Thought: {agent_scratchpad}
 • Searching for specific lease terms
 • Generating portfolio summaries and reports
 
-Just ask me about any lease documents or analysis you need! For example:
+UTILITIES DOCUMENTS (Natural Gas & Electricity):
+• Processing utilities invoices and bills
+• Finding utilities documents by location or client
+• Analyzing consumption patterns and trends
+• Tracking vendor information and costs
+• Extracting meter readings and billing periods
+• Comparing utilities usage across locations
+
+Just ask me about any documents or analysis you need! For example:
+LEASE EXAMPLES:
 - "Find all leases for client2"
 - "Show me office buildings in Chicago"
 - "What leases expire in 2024?"
-- "Give me a portfolio summary"
+
+UTILITIES EXAMPLES:
+- "Find natural gas consumption for Chicago"
+- "Show me electricity bills for client2"  
+- "What's the total gas consumption this quarter?"
+- "Compare utilities costs by location"
 """
                 }
             elif any(thanks in question_lower for thanks in ['thanks', 'thank you']):
@@ -1337,6 +1377,80 @@ Just ask me about any lease documents or analysis you need! For example:
             Dictionary with processing results for each file
         """
         return self.batch_ingest_pdfs(folder_path=None, client_name=client_name)
+    
+    def process_utilities_document(self, file_path: str, utility_type: str = "auto", client_name: str = None) -> Dict[str, Any]:
+        """Process a utilities document (natural gas or electricity) end-to-end"""
+        
+        query = f"""
+        Process the utilities document at {file_path} for client {client_name or 'unknown'}:
+        1. Extract text using utilities OCR extractor
+        2. Determine if this is a natural gas or electricity document
+        3. Ingest the text into the vector store with appropriate utilities metadata
+        4. Extract utilities information fields (vendor, location, consumption, dates, etc.)
+        
+        Return a summary of the processing results.
+        """
+        
+        try:
+            result = self.agent_executor.invoke({"input": query})
+            return {
+                "status": "success",
+                "file_path": file_path,
+                "utility_type": utility_type,
+                "client_name": client_name,
+                "result": result["output"]
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "file_path": file_path,
+                "utility_type": utility_type,
+                "client_name": client_name,
+                "error": str(e)
+            }
+    
+    def find_utilities_by_location(self, location: str) -> Dict[str, Any]:
+        """Find all utilities documents matching a specific location"""
+        
+        query = f"Find all utilities documents (natural gas and electricity) that match the location: {location}"
+        
+        try:
+            result = self.agent_executor.invoke({"input": query})
+            return {
+                "status": "success",
+                "location": location,
+                "result": result["output"]
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "location": location,
+                "error": str(e)
+            }
+    
+    def search_utilities_for_fields(self, search_query: str, fields: List[str]) -> Dict[str, Any]:
+        """Search utilities documents and extract specific fields"""
+        
+        query = f"""
+        Search for utilities documents (natural gas and electricity) related to: {search_query}
+        Extract the following fields from the most relevant documents: {', '.join(fields)}
+        """
+        
+        try:
+            result = self.agent_executor.invoke({"input": query})
+            return {
+                "status": "success",
+                "search_query": search_query,
+                "fields": fields,
+                "result": result["output"]
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "search_query": search_query,
+                "fields": fields,
+                "error": str(e)
+            }
 
 
 def create_lease_agent_from_env() -> LeaseDocumentAgent:
