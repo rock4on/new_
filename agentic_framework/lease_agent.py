@@ -1544,6 +1544,144 @@ UTILITIES EXAMPLES:
                 "fields": fields,
                 "error": str(e)
             }
+    
+    def find_utilities_by_vendor(self, vendor_name: str) -> Dict[str, Any]:
+        """Find all utilities documents from a specific vendor"""
+        
+        query = f"Find all utilities documents (natural gas and electricity) from vendor: {vendor_name}"
+        
+        try:
+            result = self.agent_executor.invoke({"input": query})
+            return {
+                "status": "success",
+                "vendor_name": vendor_name,
+                "result": result["output"]
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "vendor_name": vendor_name,
+                "error": str(e)
+            }
+    
+    def find_utilities_by_consumption_range(self, min_consumption: float = None, max_consumption: float = None, unit: str = None) -> Dict[str, Any]:
+        """Find utilities documents within a consumption range"""
+        
+        range_desc = []
+        if min_consumption is not None:
+            range_desc.append(f"at least {min_consumption}")
+        if max_consumption is not None:
+            range_desc.append(f"at most {max_consumption}")
+        if unit:
+            range_desc.append(f"in {unit}")
+        
+        range_text = " ".join(range_desc) if range_desc else "any consumption level"
+        
+        query = f"Find all utilities documents with consumption {range_text}"
+        
+        try:
+            result = self.agent_executor.invoke({"input": query})
+            return {
+                "status": "success",
+                "min_consumption": min_consumption,
+                "max_consumption": max_consumption,
+                "unit": unit,
+                "result": result["output"]
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "min_consumption": min_consumption,
+                "max_consumption": max_consumption,
+                "unit": unit,
+                "error": str(e)
+            }
+    
+    def find_utilities_by_date_range(self, start_date: str = None, end_date: str = None) -> Dict[str, Any]:
+        """Find utilities documents within a date range"""
+        
+        date_desc = []
+        if start_date:
+            date_desc.append(f"from {start_date}")
+        if end_date:
+            date_desc.append(f"to {end_date}")
+        
+        date_text = " ".join(date_desc) if date_desc else "any date range"
+        
+        query = f"Find all utilities documents with invoice dates {date_text}"
+        
+        try:
+            result = self.agent_executor.invoke({"input": query})
+            return {
+                "status": "success",
+                "start_date": start_date,
+                "end_date": end_date,
+                "result": result["output"]
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "start_date": start_date,
+                "end_date": end_date,
+                "error": str(e)
+            }
+    
+    def find_utilities_by_type(self, utility_type: str) -> Dict[str, Any]:
+        """Find utilities documents by type (electricity or natural_gas)"""
+        
+        type_mapping = {
+            "electricity": "electricity bills and invoices",
+            "electric": "electricity bills and invoices",
+            "natural_gas": "natural gas bills and invoices",
+            "gas": "natural gas bills and invoices",
+            "natural gas": "natural gas bills and invoices"
+        }
+        
+        search_term = type_mapping.get(utility_type.lower(), f"{utility_type} utilities documents")
+        query = f"Find all {search_term}"
+        
+        try:
+            result = self.agent_executor.invoke({"input": query})
+            return {
+                "status": "success",
+                "utility_type": utility_type,
+                "result": result["output"]
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "utility_type": utility_type,
+                "error": str(e)
+            }
+    
+    def analyze_utilities_consumption(self, analysis_type: str = "summary") -> Dict[str, Any]:
+        """Analyze utilities consumption patterns"""
+        
+        analysis_queries = {
+            "summary": "Provide a summary of utilities consumption across all locations and clients",
+            "by_location": "Analyze utilities consumption patterns grouped by location",
+            "by_client": "Analyze utilities consumption patterns grouped by client",
+            "by_vendor": "Analyze utilities consumption patterns grouped by vendor",
+            "trends": "Analyze utilities consumption trends over time",
+            "high_usage": "Find locations or clients with high utilities consumption",
+            "cost_analysis": "Analyze utilities costs and spending patterns"
+        }
+        
+        query = analysis_queries.get(analysis_type, f"Analyze utilities consumption: {analysis_type}")
+        
+        try:
+            result = self.agent_executor.invoke({"input": query})
+            return {
+                "status": "success",
+                "analysis_type": analysis_type,
+                "result": result["output"]
+            }
+        except Exception as e:
+            return {
+                "status": "error",
+                "analysis_type": analysis_type,
+                "error": str(e)
+            }
 
 
 def create_lease_agent_from_env() -> LeaseDocumentAgent:

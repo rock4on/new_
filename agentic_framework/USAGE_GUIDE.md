@@ -101,6 +101,30 @@ utilities_fields = agent.search_utilities_for_fields(
 )
 ```
 
+### Advanced Utilities Search
+
+```python
+# Find utilities by vendor
+vendor_results = agent.find_utilities_by_vendor("ConEd")
+
+# Find utilities by type
+electric_bills = agent.find_utilities_by_type("electricity")
+gas_bills = agent.find_utilities_by_type("natural_gas")
+
+# Find utilities by consumption range
+high_consumption = agent.find_utilities_by_consumption_range(
+    min_consumption=1000, 
+    max_consumption=5000, 
+    unit="kWh"
+)
+
+# Find utilities by date range
+recent_bills = agent.find_utilities_by_date_range(
+    start_date="2024-01-01", 
+    end_date="2024-12-31"
+)
+```
+
 ## 📊 Analysis Features
 
 ### Portfolio Analysis
@@ -114,6 +138,15 @@ result = agent.ask_question("Give me a complete portfolio analysis")
 # Analyze utilities consumption patterns
 result = agent.ask_question("Analyze electricity consumption trends by location")
 result = agent.ask_question("Compare gas usage between different clients")
+
+# Direct consumption analysis methods
+summary = agent.analyze_utilities_consumption("summary")
+by_location = agent.analyze_utilities_consumption("by_location")
+by_client = agent.analyze_utilities_consumption("by_client")
+by_vendor = agent.analyze_utilities_consumption("by_vendor")
+trends = agent.analyze_utilities_consumption("trends")
+high_usage = agent.analyze_utilities_consumption("high_usage")
+cost_analysis = agent.analyze_utilities_consumption("cost_analysis")
 ```
 
 ### Vendor Analysis
