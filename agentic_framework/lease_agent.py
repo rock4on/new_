@@ -699,14 +699,12 @@ class MatchDataTool(BaseTool):
     def _fuzzy_search_vector_by_location(self, location: str):
         """Search vector database for all document types (leases, electricity, natural gas) by location"""
         try:
-            # Strategy 1: Simple text search across all fields for ALL document types
+            # Strategy 1: Simple text search across all fields - use minimal field selection that works for all document types
             search_results = self.search_client.search(
                 search_text=f"{location}",
-                select=["id", "filename", "content", "location", "client_name", "doc_type",
+                select=["id", "filename", "content", "location", "client_name", 
                        "lease_start_date", "lease_end_date", "building_area", 
-                       "area_unit", "building_type", "processed_at", "page_no",
-                       "vendor_name", "invoice_date", "measurement_period_start",
-                       "measurement_period_end", "consumption_amount", "unit_of_measure"],
+                       "area_unit", "building_type", "processed_at", "page_no"],
                 top=100
             )
             
@@ -715,11 +713,9 @@ class MatchDataTool(BaseTool):
                 filtered_results = self.search_client.search(
                     search_text="*",
                     filter=f"client_name eq '{location}'",
-                    select=["id", "filename", "content", "location", "client_name", "doc_type",
+                    select=["id", "filename", "content", "location", "client_name", 
                            "lease_start_date", "lease_end_date", "building_area", 
-                           "area_unit", "building_type", "processed_at", "page_no",
-                           "vendor_name", "invoice_date", "measurement_period_start",
-                           "measurement_period_end", "consumption_amount", "unit_of_measure"],
+                           "area_unit", "building_type", "processed_at", "page_no"],
                     top=100
                 )
                 # Combine results
@@ -728,33 +724,52 @@ class MatchDataTool(BaseTool):
                 # If filter fails, just use text search results
                 all_results = list(search_results)
             
+            # Strategy 3: Search specifically for utilities documents with utilities fields
+            try:
+                utilities_results = self.search_client.search(
+                    search_text=f"{location}",
+                    filter="doc_type eq 'NaturalGas' or doc_type eq 'Electricity'",
+                    select=["id", "filename", "content", "location", "client_name", "doc_type",
+                           "vendor_name", "invoice_date", "measurement_period_start",
+                           "measurement_period_end", "consumption_amount", "unit_of_measure", 
+                           "processed_at", "page_no"],
+                    top=100
+                )
+                # Add utilities results to the mix
+                all_results.extend(list(utilities_results))
+            except Exception as e:
+                print(f"   ⚠️ Utilities search failed: {e}")
+                # Continue with lease results only
+            
             # Process results for ALL document types (leases, electricity, natural gas)
             matches = []
             for result in all_results:
-                # Common fields for all document types
+                # Determine document type
+                doc_type = result.get("doc_type", "Lease") or "Lease"
+                
+                # Common fields for all document types - use the original working structure
                 match_data = {
                     "id": result.get("id"),
                     "filename": result.get("filename"),
                     "location": result.get("location"),
                     "client_name": result.get("client_name"),
-                    "doc_type": result.get("doc_type", "Lease"),
+                    "doc_type": doc_type,
                     "processed_at": result.get("processed_at"),
                     "content_preview": (result.get("content", "")[:100] + "...") if result.get("content") else "",
                     "search_score": result.get("@search.score", 0)
                 }
                 
-                # Add lease-specific fields if it's a lease document
-                if result.get("doc_type") in [None, "Lease", ""]:
-                    match_data.update({
-                        "lease_start_date": result.get("lease_start_date"),
-                        "lease_end_date": result.get("lease_end_date"),
-                        "building_area": result.get("building_area"),
-                        "area_unit": result.get("area_unit"),
-                        "building_type": result.get("building_type")
-                    })
+                # Always include lease fields for backward compatibility (even if empty for utilities)
+                match_data.update({
+                    "lease_start_date": result.get("lease_start_date"),
+                    "lease_end_date": result.get("lease_end_date"),
+                    "building_area": result.get("building_area"),
+                    "area_unit": result.get("area_unit"),
+                    "building_type": result.get("building_type")
+                })
                 
-                # Add utilities-specific fields if it's electricity or natural gas
-                if result.get("doc_type") in ["Electricity", "NaturalGas"]:
+                # Add utilities-specific fields if available
+                if doc_type in ["Electricity", "NaturalGas"]:
                     match_data.update({
                         "vendor_name": result.get("vendor_name"),
                         "invoice_date": result.get("invoice_date"),
