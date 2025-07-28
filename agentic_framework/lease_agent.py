@@ -1033,7 +1033,8 @@ class LeaseDocumentAgent:
         except Exception as e:
             print(f"❌ Azure Search connection failed: {e}")
             print(f"   Endpoint: {azure_search_endpoint}")
-            print(f"   Index: {search_index_name}")
+            print(f"   Lease Index: {search_index_name}")
+            print(f"   Utilities Index: {utilities_index_name}")
             print(f"   Key: {azure_search_key[:10]}...{azure_search_key[-4:] if len(azure_search_key) > 10 else 'invalid'}")
             raise ConnectionError(f"Azure Search connection failed: {e}")
         
