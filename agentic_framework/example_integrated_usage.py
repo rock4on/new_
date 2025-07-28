@@ -85,7 +85,29 @@ def main():
     )
     print("Utilities Field Search:", utilities_fields_result['status'])
     
-    print("\n🎯 EXAMPLE 6: Advanced Analysis Queries")
+    print("\n🎯 EXAMPLE 6: Batch Processing (Separate Folders)")
+    print("-" * 50)
+    
+    # The system now has 3 separate folders and 3 separate ingestion tools
+    print("📁 Folder structure:")
+    print("   /leases - for lease documents")
+    print("   /electric - for electric bills") 
+    print("   /natural_gas - for natural gas bills")
+    print()
+    
+    # Batch ingest lease documents
+    lease_batch_result = agent.ask_question("Ingest all lease documents")
+    print("Lease Batch Processing:", lease_batch_result['result'][:300] + "...")
+    
+    # Batch ingest electric documents  
+    electric_batch_result = agent.ask_question("Process all electric bills")
+    print("Electric Batch Processing:", electric_batch_result['result'][:300] + "...")
+    
+    # Batch ingest natural gas documents
+    gas_batch_result = agent.ask_question("Ingest natural gas documents") 
+    print("Natural Gas Batch Processing:", gas_batch_result['result'][:300] + "...")
+    
+    print("\n🎯 EXAMPLE 7: Advanced Analysis Queries")
     print("-" * 50)
     
     # Complex analysis that combines both document types
@@ -101,13 +123,6 @@ def main():
         result = agent.ask_question(query)
         print(f"\nQuery: {query}")
         print(f"Result: {result['result'][:300]}...")
-    
-    print("\n🎯 EXAMPLE 7: Batch Processing")
-    print("-" * 50)
-    
-    # Batch ingest all documents (will handle both lease and utilities PDFs)
-    batch_result = agent.ask_question("Ingest all PDF documents from the default folder")
-    print("Batch Processing:", batch_result['result'][:400] + "...")
 
 
 def interactive_demo():
@@ -146,6 +161,7 @@ def example_queries():
     print("=" * 40)
     
     lease_queries = [
+        "Ingest all lease documents",  # processes /leases folder
         "Find all office leases in Chicago",
         "What leases expire in 2024?", 
         "Show me leases for client2",
@@ -154,6 +170,8 @@ def example_queries():
     ]
     
     utilities_queries = [
+        "Process all electric bills",  # processes /electric folder
+        "Ingest natural gas documents",  # processes /natural_gas folder
         "Find natural gas bills for Chicago",
         "What's the electricity consumption for client2?",
         "Which vendor supplies the most gas?",

@@ -146,15 +146,32 @@ agent.ask_question("Compare Q1 vs Q4 energy consumption")
 agent.ask_question("Show me recent utilities invoices")
 ```
 
-## 📁 Batch Processing
+## 📁 Batch Processing (Separate Folders)
 
-### Ingest All Documents
+The system now uses **3 separate folders** for different document types:
+
+### Folder Structure
+```
+/leases          - Place lease documents here
+/electric        - Place electric bills here  
+/natural_gas     - Place natural gas bills here
+```
+
+### Separate Ingestion Tools
 ```python
-# Automatically processes both lease PDFs and utilities PDFs
-result = agent.ask_question("Ingest all PDF documents")
+# Process lease documents from /leases folder
+result = agent.ask_question("Ingest all lease documents")
 
-# Or using direct method
-batch_result = agent.ingest_all(client_name="client2")
+# Process electric bills from /electric folder  
+result = agent.ask_question("Process all electric bills")
+
+# Process natural gas bills from /natural_gas folder
+result = agent.ask_question("Ingest natural gas documents")
+
+# Each folder can have client subfolders for organization:
+# /leases/client1/document.pdf
+# /electric/client2/bill.pdf
+# /natural_gas/client3/invoice.pdf
 ```
 
 ## 🛠️ Available Tools
@@ -174,9 +191,13 @@ The agent automatically uses the appropriate tools based on your query:
 - `utilities_location_matcher`: Find utilities by location
 - `utilities_vector_search_fields`: Search utilities documents
 
+### Batch Ingestion Tools
+- `batch_ingest_leases`: Process all PDFs in /leases folder
+- `batch_ingest_electric`: Process all PDFs in /electric folder  
+- `batch_ingest_natural_gas`: Process all PDFs in /natural_gas folder
+
 ### Shared Tools
 - `match_data`: Match Excel data with vector database
-- `batch_ingest`: Process all PDFs automatically
 
 ## 📈 Data Schema
 

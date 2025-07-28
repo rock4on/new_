@@ -42,6 +42,7 @@ from typing_extensions import TypedDict
 # Import utilities models and agent factory
 from utilities_models import NaturalGas_Electricity_Information, UTILITIES_FIELDS
 from utilities_agent import create_utilities_tools, UtilitiesAnalysisTool
+from batch_ingestion_tools import create_batch_ingestion_tools
 
 
 class LeaseInformation(BaseModel):
@@ -864,50 +865,6 @@ class MatchDataTool(BaseTool):
             return f"❌ Error matching data: {str(e)}"
 
 
-class BatchIngestionTool(BaseTool):
-    """Tool for batch ingesting all PDF documents from the default folder"""
-    
-    name: str = "batch_ingest"
-    description: str = "Automatically discovers and ingests all PDF documents from the default folder. Uses OCR to extract text and stores in vector database. Input can be empty '{}' or JSON with 'client_name' field to assign all documents to a specific client."
-    agent_instance: Any = Field(default=None, exclude=True)
-    
-    def __init__(self, agent_instance, **kwargs):
-        super().__init__(**kwargs)
-        object.__setattr__(self, 'agent_instance', agent_instance)
-    
-    def _run(self, input_data: str = "{}") -> str:
-        """Run batch ingestion of all PDFs in default folder"""
-        try:
-            print("   📁 Starting batch ingestion of all PDF documents...")
-            
-            # Parse input for optional client name
-            client_name = None
-            if input_data.strip() and input_data.strip() != "{}":
-                try:
-                    data = json.loads(input_data)
-                    client_name = data.get('client_name')
-                except json.JSONDecodeError:
-                    # If not valid JSON, treat as client name string
-                    client_name = input_data.strip()
-            
-            # Call the agent's ingest_all method
-            result = self.agent_instance.ingest_all(client_name=client_name)
-            
-            # Format response for the agent
-            if result['status'] == 'completed':
-                return f"✅ Successfully ingested all PDFs! Processed {result['successful']} files from {result['folder_path']}. All documents are now searchable in the vector database."
-            elif result['status'] == 'partial_success':
-                return f"⚠️ Partially successful batch ingestion: {result['successful']} files succeeded, {result['failed']} failed from {result['folder_path']}. Successfully processed documents are searchable."
-            elif result['status'] == 'warning':
-                return f"⚠️ No PDF files found in folder: {result.get('folder_path', 'default folder')}. Please check if PDFs exist in the configured folder."
-            elif result['status'] == 'failed':
-                return f"❌ Batch ingestion failed: all {result['failed']} files failed to process from {result['folder_path']}. Check file permissions and formats."
-            else:
-                return f"❌ Batch ingestion error: {result.get('error', 'Unknown error occurred during batch processing')}"
-                
-        except Exception as e:
-            return f"❌ Error during batch ingestion: {str(e)}"
-
 
 class LeaseDocumentAgent:
     """Main agent class for lease document processing"""
@@ -1000,8 +957,7 @@ class LeaseDocumentAgent:
                     embedding_model=self.embedding_model
                 ),
                 LeaseAnalysisTool(search_client=self.search_client),
-                MatchDataTool(search_client=self.search_client),
-                BatchIngestionTool(agent_instance=self)
+                MatchDataTool(search_client=self.search_client)
             ]
             
             # Add utilities tools
@@ -1013,6 +969,10 @@ class LeaseDocumentAgent:
                 embedding_model=self.embedding_model
             )
             self.tools.extend(utilities_tools)
+            
+            # Add the three separate batch ingestion tools
+            batch_ingestion_tools = create_batch_ingestion_tools(agent_instance=self)
+            self.tools.extend(batch_ingestion_tools)
             print(f"✅ Initialized {len(self.tools)} tools successfully")
             
         except Exception as e:
@@ -1063,7 +1023,10 @@ IMPORTANT: Always follow this exact format:
 - For simple conversations (greetings, questions about capabilities): Use "Final Answer:" directly
 - For lease analysis (searching, analyzing data): Use "Action:" with a tool, then "Final Answer:" with your analysis
 - For utilities analysis (natural gas/electricity documents): Use utilities-specific tools like "utilities_location_matcher" or "utilities_vector_search_fields"
-- For batch ingestion (processing PDF files): Use "batch_ingest" tool to automatically discover and process all PDFs
+- For batch ingestion (processing PDF files): Use specific ingestion tools:
+  - "batch_ingest_leases" for lease documents in /leases folder
+  - "batch_ingest_electric" for electric documents in /electric folder  
+  - "batch_ingest_natural_gas" for natural gas documents in /natural_gas folder
 
 Examples:
 
@@ -1073,13 +1036,21 @@ Thought: This is a greeting, no tools needed.
 Final Answer: Hello! I'm your lease document analyst. I can help you search and analyze lease documents, and ingest new PDF documents. What would you like to know?
 
 Batch ingestion:
-Question: Ingest all PDF documents
-Thought: I need to use the batch ingestion tool to process all PDF files in the folder.
-Action: batch_ingest
+Question: Ingest all lease documents
+Thought: I need to use the lease batch ingestion tool to process all lease PDF files.
+Action: batch_ingest_leases
 Action Input: {{}}
-Observation: [ingestion results]
-Thought: The PDFs have been processed and are ready for analysis.
-Final Answer: [summary of ingestion results]
+Observation: [lease ingestion results]
+Thought: The lease PDFs have been processed and are ready for analysis.
+Final Answer: [summary of lease ingestion results]
+
+Question: Process all electric bills
+Thought: I need to use the electric batch ingestion tool to process all electric PDF files.
+Action: batch_ingest_electric
+Action Input: {{}}
+Observation: [electric ingestion results]
+Thought: The electric PDFs have been processed and are ready for analysis.
+Final Answer: [summary of electric ingestion results]
 
 Lease analysis:
 Question: Find leases for client2
@@ -1222,28 +1193,33 @@ LEASE DOCUMENTS:
 • Finding leases by client name or location
 • Analyzing lease portfolios for insights and trends  
 • Tracking lease expirations and renewal opportunities
-• Processing PDF documents with OCR
+• Processing PDF documents with OCR from /leases folder
 • Searching for specific lease terms
 • Generating portfolio summaries and reports
 
 UTILITIES DOCUMENTS (Natural Gas & Electricity):
-• Processing utilities invoices and bills
+• Processing utilities invoices and bills from separate folders
 • Finding utilities documents by location or client
 • Analyzing consumption patterns and trends
 • Tracking vendor information and costs
 • Extracting meter readings and billing periods
 • Comparing utilities usage across locations
 
+DOCUMENT PROCESSING:
+• Place lease PDFs in /leases folder (with optional client subfolders)
+• Place electric bills in /electric folder (with optional client subfolders)
+• Place natural gas bills in /natural_gas folder (with optional client subfolders)
+
 Just ask me about any documents or analysis you need! For example:
 LEASE EXAMPLES:
+- "Ingest all lease documents" (processes /leases folder)
 - "Find all leases for client2"
 - "Show me office buildings in Chicago"
-- "What leases expire in 2024?"
 
 UTILITIES EXAMPLES:
+- "Process all electric bills" (processes /electric folder)
+- "Ingest natural gas documents" (processes /natural_gas folder)
 - "Find natural gas consumption for Chicago"
-- "Show me electricity bills for client2"  
-- "What's the total gas consumption this quarter?"
 - "Compare utilities costs by location"
 """
                 }

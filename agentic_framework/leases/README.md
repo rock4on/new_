@@ -1,0 +1,1 @@
+Sample lease document placeholder
