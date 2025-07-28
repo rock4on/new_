@@ -1008,33 +1008,52 @@ class LeaseDocumentAgent:
                 print(f"   Base URL: {openai_base_url}")
             raise ConnectionError(f"OpenAI connection failed: {e}")
         
-        # Initialize Azure Search client with debugging
+        # Initialize Azure Search clients - separate indexes for leases and utilities
         try:
-            print("🔍 Testing Azure Search connection...")
+            print("🔍 Testing Azure Search connections...")
             
+            # Lease documents search client
             self.search_client = SearchClient(
                 endpoint=azure_search_endpoint,
                 index_name=search_index_name,
                 credential=AzureKeyCredential(azure_search_key)
             )
             
-            # Test connection by trying to get index info
+            # Utilities documents search client (separate index)
+            utilities_index_name = search_index_name.replace('-documents', '-utilities') if '-documents' in search_index_name else f"{search_index_name}-utilities"
+            self.utilities_search_client = SearchClient(
+                endpoint=azure_search_endpoint,
+                index_name=utilities_index_name,
+                credential=AzureKeyCredential(azure_search_key)
+            )
+            
+            # Test lease index connection
             try:
-                # Simple test to verify connection
                 search_results = list(self.search_client.search("*", top=1))
-                print("✅ Azure Search connection successful")
+                print("✅ Lease index connection successful")
             except Exception as search_e:
                 if "404" in str(search_e) or "index" in str(search_e).lower():
-                    print(f"⚠️  Azure Search connected but index '{search_index_name}' may not exist: {search_e}")
+                    print(f"⚠️  Lease index '{search_index_name}' may not exist: {search_e}")
                     print("   This is OK - index will be created when first document is uploaded")
                 else:
-                    raise search_e
+                    print(f"⚠️  Lease index connection issue: {search_e}")
+            
+            # Test utilities index connection (optional - may not exist yet)
+            try:
+                utilities_results = list(self.utilities_search_client.search("*", top=1))
+                print("✅ Utilities index connection successful")
+            except Exception as utilities_e:
+                if "404" in str(utilities_e) or "index" in str(utilities_e).lower():
+                    print(f"⚠️  Utilities index '{utilities_index_name}' may not exist: {utilities_e}")
+                    print("   This is OK - index will be created when first utilities document is uploaded")
+                else:
+                    print(f"⚠️  Utilities index connection issue: {utilities_e}")
             
         except Exception as e:
             print(f"❌ Azure Search connection failed: {e}")
             print(f"   Endpoint: {azure_search_endpoint}")
             print(f"   Lease Index: {search_index_name}")
-            print(f"   Utilities Index: {utilities_index_name}")
+            print(f"   Utilities Index: {utilities_index_name if 'utilities_index_name' in locals() else 'N/A'}")
             print(f"   Key: {azure_search_key[:10]}...{azure_search_key[-4:] if len(azure_search_key) > 10 else 'invalid'}")
             raise ConnectionError(f"Azure Search connection failed: {e}")
         
