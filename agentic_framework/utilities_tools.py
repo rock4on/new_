@@ -30,12 +30,16 @@ class UtilitiesOCRTool(BaseTool):
         try:
             from azure.ai.formrecognizer import DocumentAnalysisClient
             from azure.core.credentials import AzureKeyCredential
+            from azure.core.pipeline.transport import RequestsTransport
             
             print(f"   🔍 Testing Azure Form Recognizer connection for utilities...")
             
+            # Disable SSL verification for Azure OCR transport
+            transport = RequestsTransport(connection_verify=False)
             azure_client = DocumentAnalysisClient(
                 endpoint=azure_endpoint,
-                credential=AzureKeyCredential(azure_key)
+                credential=AzureKeyCredential(azure_key),
+                transport=transport
             )
             
             object.__setattr__(self, 'azure_client', azure_client)

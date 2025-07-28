@@ -38,7 +38,7 @@ class BatchIngestLeasesTool(BaseTool):
                     client_name = input_data.strip()
             
             # Set specific folder path for leases
-            leases_folder = Path("/home/andrei/Desktop/pwc/agentic_framework/leases")
+            leases_folder = Path("./leases")
             
             # Call the agent's batch_ingest_pdfs method with specific folder
             result = self.agent_instance.batch_ingest_pdfs(
@@ -88,7 +88,7 @@ class BatchIngestElectricTool(BaseTool):
                     client_name = input_data.strip()
             
             # Set specific folder path for electric documents
-            electric_folder = Path("/home/andrei/Desktop/pwc/agentic_framework/electric")
+            electric_folder = Path("./electric")
             
             # Call the agent's batch_ingest_pdfs method with specific folder
             result = self.agent_instance.batch_ingest_pdfs(
@@ -138,7 +138,7 @@ class BatchIngestNaturalGasTool(BaseTool):
                     client_name = input_data.strip()
             
             # Set specific folder path for natural gas documents
-            natural_gas_folder = Path("/home/andrei/Desktop/pwc/agentic_framework/natural_gas")
+            natural_gas_folder = Path("./natural_gas")
             
             # Call the agent's batch_ingest_pdfs method with specific folder
             result = self.agent_instance.batch_ingest_pdfs(

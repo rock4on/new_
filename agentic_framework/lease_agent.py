@@ -70,9 +70,12 @@ class AzureOCRTool(BaseTool):
         try:
             print(f"   🔍 Testing Azure Form Recognizer connection...")
             
+            # Disable SSL verification for Azure OCR transport
+            transport = RequestsTransport(connection_verify=False)
             azure_client = DocumentAnalysisClient(
                 endpoint=azure_endpoint,
-                credential=AzureKeyCredential(azure_key)
+                credential=AzureKeyCredential(azure_key),
+                transport=transport
             )
             
             # Test the connection by checking the service
