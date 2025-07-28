@@ -682,10 +682,12 @@ class MatchDataTool(BaseTool):
     name: str = "match_data"
     description: str = "Matches data from EGA.xlsx with vector database entries (leases, electricity, and natural gas) based on location. Input should be JSON with 'excel_path' (path to Excel file), optional 'location_column' (default: auto-detect), and optional 'column_2' (default: second column)."
     search_client: Any = Field(default=None, exclude=True)
+    utilities_search_client: Any = Field(default=None, exclude=True)
     
-    def __init__(self, search_client: SearchClient, **kwargs):
+    def __init__(self, search_client: SearchClient, utilities_search_client: SearchClient, **kwargs):
         super().__init__(**kwargs)
         object.__setattr__(self, 'search_client', search_client)
+        object.__setattr__(self, 'utilities_search_client', utilities_search_client)
     
     def _load_excel_data(self, excel_path: str):
         """Load data from Excel file"""
@@ -697,87 +699,126 @@ class MatchDataTool(BaseTool):
             return None, f"Error loading Excel file: {e}"
     
     def _fuzzy_search_vector_by_location(self, location: str):
-        """Search vector database for all document types (leases, electricity, natural gas) by location"""
+        """Search vector database using same logic as LocationMatchingTool"""
         try:
-            # Strategy 1: Simple text search across all fields - use minimal field selection that works for all document types
-            search_results = self.search_client.search(
-                search_text=f"{location}",
-                select=["id", "filename", "content", "location", "client_name", 
-                       "lease_start_date", "lease_end_date", "building_area", 
-                       "area_unit", "building_type", "processed_at", "page_no"],
-                top=100
-            )
+            all_results = []
             
-            # Strategy 2: Also try filter-based search for exact client matches
+            # STRATEGY 1: Search LEASE index - USE EXACT SAME LOGIC AS LocationMatchingTool
             try:
-                filtered_results = self.search_client.search(
-                    search_text="*",
-                    filter=f"client_name eq '{location}'",
-                    select=["id", "filename", "content", "location", "client_name", 
-                           "lease_start_date", "lease_end_date", "building_area", 
-                           "area_unit", "building_type", "processed_at", "page_no"],
+                print(f"   🔍 Searching lease index for: {location}")
+                
+                # Use EXACT same search as LocationMatchingTool (this is what works!)
+                lease_search_results = self.search_client.search(
+                    search_text=f"{location}",
+                    select=["id", "filename", "location", "client_name", "lease_start_date", 
+                           "lease_end_date", "building_area", "area_unit", "building_type", "processed_at"],
                     top=100
                 )
-                # Combine results
-                all_results = list(search_results) + list(filtered_results)
-            except:
-                # If filter fails, just use text search results
-                all_results = list(search_results)
+                
+                # Also try filter-based search for exact client matches (EXACT same as LocationMatchingTool)
+                try:
+                    lease_filtered_results = self.search_client.search(
+                        search_text="*",
+                        filter=f"client_name eq '{location}'",
+                        select=["id", "filename", "location", "client_name", "lease_start_date", 
+                               "lease_end_date", "building_area", "area_unit", "building_type", "processed_at"],
+                        top=100
+                    )
+                    # Combine results (EXACT same as LocationMatchingTool)
+                    lease_results = list(lease_search_results) + list(lease_filtered_results)
+                except:
+                    # If filter fails, just use text search results (EXACT same as LocationMatchingTool)
+                    lease_results = list(lease_search_results)
+                
+                all_results.extend(lease_results)
+                print(f"   ✅ Found {len(lease_results)} results in lease index")
+            except Exception as e:
+                print(f"   ⚠️ Lease index search failed: {e}")
             
-            # Strategy 3: Search specifically for utilities documents with utilities fields
+            # STRATEGY 2: Search UTILITIES index (separate index)
             try:
-                utilities_results = self.search_client.search(
+                print(f"   🔍 Searching utilities index for: {location}")
+                utilities_start_count = len(all_results)
+                
+                # Text search in utilities index
+                utilities_search_results = self.utilities_search_client.search(
                     search_text=f"{location}",
-                    filter="doc_type eq 'NaturalGas' or doc_type eq 'Electricity'",
                     select=["id", "filename", "content", "location", "client_name", "doc_type",
                            "vendor_name", "invoice_date", "measurement_period_start",
                            "measurement_period_end", "consumption_amount", "unit_of_measure", 
                            "processed_at", "page_no"],
                     top=100
                 )
-                # Add utilities results to the mix
-                all_results.extend(list(utilities_results))
+                all_results.extend(list(utilities_search_results))
+                
+                # Filter search in utilities index for exact client matches
+                try:
+                    utilities_filtered_results = self.utilities_search_client.search(
+                        search_text="*",
+                        filter=f"client_name eq '{location}'",
+                        select=["id", "filename", "content", "location", "client_name", "doc_type",
+                               "vendor_name", "invoice_date", "measurement_period_start",
+                               "measurement_period_end", "consumption_amount", "unit_of_measure", 
+                               "processed_at", "page_no"],
+                        top=100
+                    )
+                    all_results.extend(list(utilities_filtered_results))
+                except:
+                    pass  # Filter failed, continue with text search results
+                    
+                utilities_count = len(all_results) - utilities_start_count
+                print(f"   ✅ Found {utilities_count} results in utilities index")
             except Exception as e:
-                print(f"   ⚠️ Utilities search failed: {e}")
-                # Continue with lease results only
+                print(f"   ⚠️ Utilities index search failed: {e}")
             
-            # Process results for ALL document types (leases, electricity, natural gas)
+            # Use EXACT same logic as LocationMatchingTool
             matches = []
             for result in all_results:
                 # Determine document type
-                doc_type = result.get("doc_type", "Lease") or "Lease"
+                doc_type = result.get("doc_type")
                 
-                # Common fields for all document types - use the original working structure
-                match_data = {
-                    "id": result.get("id"),
-                    "filename": result.get("filename"),
-                    "location": result.get("location"),
-                    "client_name": result.get("client_name"),
-                    "doc_type": doc_type,
-                    "processed_at": result.get("processed_at"),
-                    "content_preview": (result.get("content", "")[:100] + "...") if result.get("content") else "",
-                    "search_score": result.get("@search.score", 0)
-                }
-                
-                # Always include lease fields for backward compatibility (even if empty for utilities)
-                match_data.update({
-                    "lease_start_date": result.get("lease_start_date"),
-                    "lease_end_date": result.get("lease_end_date"),
-                    "building_area": result.get("building_area"),
-                    "area_unit": result.get("area_unit"),
-                    "building_type": result.get("building_type")
-                })
-                
-                # Add utilities-specific fields if available
+                # Build match data - use same structure as LocationMatchingTool for lease documents
                 if doc_type in ["Electricity", "NaturalGas"]:
-                    match_data.update({
+                    # This is a utilities document
+                    match_data = {
+                        "id": result.get("id"),
+                        "filename": result.get("filename"),
+                        "location": result.get("location"),
+                        "client_name": result.get("client_name"),
+                        "doc_type": doc_type,
                         "vendor_name": result.get("vendor_name"),
                         "invoice_date": result.get("invoice_date"),
                         "measurement_period_start": result.get("measurement_period_start"),
                         "measurement_period_end": result.get("measurement_period_end"),
                         "consumption_amount": result.get("consumption_amount"),
-                        "unit_of_measure": result.get("unit_of_measure")
-                    })
+                        "unit_of_measure": result.get("unit_of_measure"),
+                        "processed_at": result.get("processed_at"),
+                        "content_preview": (result.get("content", "")[:100] + "...") if result.get("content") else "",
+                        "search_score": result.get("@search.score", 0),
+                        # Include empty lease fields for compatibility
+                        "lease_start_date": None,
+                        "lease_end_date": None,
+                        "building_area": None,
+                        "area_unit": None,
+                        "building_type": None
+                    }
+                else:
+                    # This is a lease document - use EXACT same structure as LocationMatchingTool
+                    match_data = {
+                        "id": result.get("id"),
+                        "filename": result.get("filename"),
+                        "location": result.get("location"),
+                        "client_name": result.get("client_name"),
+                        "lease_start_date": result.get("lease_start_date"),
+                        "lease_end_date": result.get("lease_end_date"),
+                        "building_area": result.get("building_area"),
+                        "area_unit": result.get("area_unit"),
+                        "building_type": result.get("building_type"),
+                        "processed_at": result.get("processed_at"),
+                        "content_preview": (result.get("content", "")[:100] + "...") if result.get("content") else "",
+                        "search_score": result.get("@search.score", 0),
+                        "doc_type": "Lease"
+                    }
                 
                 matches.append(match_data)
             
@@ -891,7 +932,7 @@ class MatchDataTool(BaseTool):
                         response += f"     Client: {match['client_name']}\n"
                         
                         # Show lease-specific fields for lease documents
-                        if doc_type in [None, 'Lease', '']:
+                        if doc_type == 'Lease':
                             if match.get('lease_start_date'):
                                 response += f"     Lease: {match['lease_start_date']} - {match.get('lease_end_date')}\n"
                             if match.get('building_area'):
@@ -1013,15 +1054,15 @@ class LeaseDocumentAgent:
                     embedding_model=self.embedding_model
                 ),
                 LeaseAnalysisTool(search_client=self.search_client),
-                MatchDataTool(search_client=self.search_client)
+                MatchDataTool(search_client=self.search_client, utilities_search_client=self.utilities_search_client)
             ]
             
-            # Add utilities tools
+            # Add utilities tools with separate utilities search client
             utilities_tools = create_utilities_tools(
                 azure_endpoint=azure_endpoint,
                 azure_key=azure_key,
                 openai_client=self.openai_client,
-                search_client=self.search_client,
+                search_client=self.utilities_search_client,  # Use utilities search client
                 embedding_model=self.embedding_model
             )
             self.tools.extend(utilities_tools)
