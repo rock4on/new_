@@ -680,7 +680,7 @@ class MatchDataTool(BaseTool):
     """Tool for matching Excel data with vector database data based on location"""
     
     name: str = "match_data"
-    description: str = "Matches data from EGA.xlsx with vector database entries based on location. Input should be JSON with 'excel_path' (path to Excel file), optional 'location_column' (default: auto-detect), and optional 'column_2' (default: second column)."
+    description: str = "Matches data from EGA.xlsx with vector database entries (leases, electricity, and natural gas) based on location. Input should be JSON with 'excel_path' (path to Excel file), optional 'location_column' (default: auto-detect), and optional 'column_2' (default: second column)."
     search_client: Any = Field(default=None, exclude=True)
     
     def __init__(self, search_client: SearchClient, **kwargs):
@@ -697,15 +697,16 @@ class MatchDataTool(BaseTool):
             return None, f"Error loading Excel file: {e}"
     
     def _fuzzy_search_vector_by_location(self, location: str):
-        """Search vector database using same logic as LocationMatchingTool"""
+        """Search vector database for all document types (leases, electricity, natural gas) by location"""
         try:
-            # Use the SAME search logic as LocationMatchingTool that works for Helsinki
-            # Strategy 1: Simple text search across all fields (this is what works!)
+            # Strategy 1: Simple text search across all fields for ALL document types
             search_results = self.search_client.search(
                 search_text=f"{location}",
-                select=["id", "filename", "content", "location", "client_name", 
+                select=["id", "filename", "content", "location", "client_name", "doc_type",
                        "lease_start_date", "lease_end_date", "building_area", 
-                       "area_unit", "building_type", "processed_at", "page_no"],
+                       "area_unit", "building_type", "processed_at", "page_no",
+                       "vendor_name", "invoice_date", "measurement_period_start",
+                       "measurement_period_end", "consumption_amount", "unit_of_measure"],
                 top=100
             )
             
@@ -714,9 +715,11 @@ class MatchDataTool(BaseTool):
                 filtered_results = self.search_client.search(
                     search_text="*",
                     filter=f"client_name eq '{location}'",
-                    select=["id", "filename", "content", "location", "client_name", 
+                    select=["id", "filename", "content", "location", "client_name", "doc_type",
                            "lease_start_date", "lease_end_date", "building_area", 
-                           "area_unit", "building_type", "processed_at", "page_no"],
+                           "area_unit", "building_type", "processed_at", "page_no",
+                           "vendor_name", "invoice_date", "measurement_period_start",
+                           "measurement_period_end", "consumption_amount", "unit_of_measure"],
                     top=100
                 )
                 # Combine results
@@ -725,23 +728,43 @@ class MatchDataTool(BaseTool):
                 # If filter fails, just use text search results
                 all_results = list(search_results)
             
-            # Use EXACT same logic as LocationMatchingTool
+            # Process results for ALL document types (leases, electricity, natural gas)
             matches = []
             for result in all_results:
-                matches.append({
+                # Common fields for all document types
+                match_data = {
                     "id": result.get("id"),
                     "filename": result.get("filename"),
                     "location": result.get("location"),
                     "client_name": result.get("client_name"),
-                    "lease_start_date": result.get("lease_start_date"),
-                    "lease_end_date": result.get("lease_end_date"),
-                    "building_area": result.get("building_area"),
-                    "area_unit": result.get("area_unit"),
-                    "building_type": result.get("building_type"),
+                    "doc_type": result.get("doc_type", "Lease"),
                     "processed_at": result.get("processed_at"),
                     "content_preview": (result.get("content", "")[:100] + "...") if result.get("content") else "",
                     "search_score": result.get("@search.score", 0)
-                })
+                }
+                
+                # Add lease-specific fields if it's a lease document
+                if result.get("doc_type") in [None, "Lease", ""]:
+                    match_data.update({
+                        "lease_start_date": result.get("lease_start_date"),
+                        "lease_end_date": result.get("lease_end_date"),
+                        "building_area": result.get("building_area"),
+                        "area_unit": result.get("area_unit"),
+                        "building_type": result.get("building_type")
+                    })
+                
+                # Add utilities-specific fields if it's electricity or natural gas
+                if result.get("doc_type") in ["Electricity", "NaturalGas"]:
+                    match_data.update({
+                        "vendor_name": result.get("vendor_name"),
+                        "invoice_date": result.get("invoice_date"),
+                        "measurement_period_start": result.get("measurement_period_start"),
+                        "measurement_period_end": result.get("measurement_period_end"),
+                        "consumption_amount": result.get("consumption_amount"),
+                        "unit_of_measure": result.get("unit_of_measure")
+                    })
+                
+                matches.append(match_data)
             
             # Group by filename to avoid counting pages as separate documents (EXACT same logic)
             documents = {}
@@ -847,13 +870,28 @@ class MatchDataTool(BaseTool):
                 if result['matches']:
                     response += f"✅ Vector Matches ({result['vector_matches']}):\n"
                     for i, match in enumerate(result['matches'], 1):
-                        response += f"  {i}. {match['filename']} (Score: {match['search_score']:.2f})\n"
+                        doc_type = match.get('doc_type', 'Lease')
+                        response += f"  {i}. {match['filename']} ({doc_type}) (Score: {match['search_score']:.2f})\n"
                         response += f"     Location: {match['location']}\n"
                         response += f"     Client: {match['client_name']}\n"
-                        if match['lease_start_date']:
-                            response += f"     Lease: {match['lease_start_date']} - {match['lease_end_date']}\n"
-                        if match['building_area']:
-                            response += f"     Area: {match['building_area']} {match.get('area_unit', '')}\n"
+                        
+                        # Show lease-specific fields for lease documents
+                        if doc_type in [None, 'Lease', '']:
+                            if match.get('lease_start_date'):
+                                response += f"     Lease: {match['lease_start_date']} - {match.get('lease_end_date')}\n"
+                            if match.get('building_area'):
+                                response += f"     Area: {match['building_area']} {match.get('area_unit', '')}\n"
+                        
+                        # Show utilities-specific fields for electricity/natural gas documents
+                        elif doc_type in ['Electricity', 'NaturalGas']:
+                            if match.get('vendor_name'):
+                                response += f"     Vendor: {match['vendor_name']}\n"
+                            if match.get('invoice_date'):
+                                response += f"     Invoice Date: {match['invoice_date']}\n"
+                            if match.get('consumption_amount'):
+                                response += f"     Consumption: {match['consumption_amount']} {match.get('unit_of_measure', '')}\n"
+                            if match.get('measurement_period_start'):
+                                response += f"     Period: {match['measurement_period_start']} - {match.get('measurement_period_end', '')}\n"
                 else:
                     response += f"❌ No vector matches found\n"
             
