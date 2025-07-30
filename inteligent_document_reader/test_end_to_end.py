@@ -4,11 +4,22 @@ End-to-end test for Inteligent Document Reader - Lease ingestion and Excel match
 """
 
 import os
+import sys
 import json
 from pathlib import Path
-from inteligent_document_reader import DocumentAgent
-from inteligent_document_reader.tools.matching_tool_lease import MatchingToolLease
-from inteligent_document_reader.config import Config
+
+# Add parent directory to path for imports
+sys.path.append(str(Path(__file__).parent.parent))
+
+try:
+    from inteligent_document_reader import DocumentAgent
+    from inteligent_document_reader.tools.matching_tool_lease import MatchingToolLease
+    from inteligent_document_reader.config import Config
+except ImportError:
+    # If running from within the directory, use relative imports
+    from agents.document_agent import DocumentAgent
+    from tools.matching_tool_lease import MatchingToolLease
+    from config import Config
 
 
 def test_lease_ingestion():
