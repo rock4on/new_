@@ -112,11 +112,165 @@ class AzureOCRTool(BaseTool):
             return f"Error extracting text: {str(e)}"
 
 
+class LeaseInformationExtractionTool(BaseTool):
+    """Tool for extracting structured lease information from PDF documents using AI"""
+    
+    name: str = "lease_info_extractor"
+    description: str = "Extracts structured lease information from PDF documents using Azure OCR and AI. Input should be the file path to a PDF document."
+    azure_client: Any = Field(default=None, exclude=True)
+    openai_client: Any = Field(default=None, exclude=True)
+    
+    def __init__(self, azure_endpoint: str, azure_key: str, openai_client, **kwargs):
+        super().__init__(**kwargs)
+        try:
+            print(f"   🔍 Testing Azure Form Recognizer connection for lease extraction...")
+            
+            # Disable SSL verification for Azure OCR transport
+            transport = RequestsTransport(connection_verify=False)
+            azure_client = DocumentAnalysisClient(
+                endpoint=azure_endpoint,
+                credential=AzureKeyCredential(azure_key),
+                transport=transport
+            )
+            
+            object.__setattr__(self, 'azure_client', azure_client)
+            object.__setattr__(self, 'openai_client', openai_client)
+            print(f"   ✅ Lease information extraction tool initialized")
+            
+        except Exception as e:
+            print(f"   ❌ Lease extraction tool initialization failed: {e}")
+            raise ConnectionError(f"Lease extraction tool initialization failed: {e}")
+    
+    def extract_lease_info_ai(self, text: str) -> Dict[str, Any]:
+        """
+        Use AI with structured outputs to extract lease information from text.
+        
+        Args:
+            text: Raw text from PDF
+            
+        Returns:
+            Dictionary with extracted lease information
+        """
+        prompt = f"""
+        Extract lease information from the following document text. Identify and extract all available fields.
+        
+        For dates, use YYYY-MM-DD format if possible.
+        For building area, extract the numeric value only.
+        For area unit, use standard units like "sq ft", "sq m", "sqft", etc.
+        
+        Document text:
+        {text}
+        """
+        
+        try:
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "You are a document analyst specializing in lease agreement analysis. Extract information accurately from the provided text."},
+                    {"role": "user", "content": prompt}
+                ],
+                response_format=LeaseInformation,
+                temperature=0.1,
+                max_tokens=1000
+            )
+            
+            # Parse the structured response
+            lease_info = response.choices[0].message.parsed
+            
+            # Convert Pydantic model to dictionary
+            extracted_data = lease_info.model_dump()
+            
+            # Check if AI extracted any meaningful data
+            has_data = any(value is not None and str(value).strip() for value in extracted_data.values())
+            
+            if not has_data:
+                print("   ⚠️  AI extraction completed but no lease information was found in the document")
+                print("   📄 This may indicate:")
+                print("      - Document doesn't contain lease information")
+                print("      - OCR quality is poor") 
+                print("      - Document format is not recognized")
+            else:
+                # Print what was successfully extracted
+                extracted_fields = [field for field, value in extracted_data.items() 
+                                  if value is not None and str(value).strip()]
+                print(f"   ✅ AI successfully extracted: {', '.join(extracted_fields)}")
+            
+            return extracted_data
+            
+        except Exception as e:
+            print(f"   ❌ AI extraction failed with error: {e}")
+            print("   📄 This could be due to:")
+            print("      - OpenAI API issues")
+            print("      - Invalid API key")
+            print("      - Network connectivity problems")
+            print("      - Text format issues")
+            return {
+                'description': None,
+                'location': None,
+                'lease_start_date': None,
+                'lease_end_date': None,
+                'building_area': None,
+                'area_unit': None,
+                'building_type': None
+            }
+    
+    def _run(self, file_path: str) -> str:
+        """Extract structured lease information from PDF file"""
+        try:
+            pdf_path = Path(file_path)
+            if not pdf_path.exists():
+                return f"Error: File not found at {file_path}"
+            
+            print(f"   📄 Processing lease document: {pdf_path.name}")
+            
+            # Step 1: Extract text using Azure OCR
+            print(f"   🔍 Extracting text with Azure OCR...")
+            with open(pdf_path, "rb") as f:
+                poller = self.azure_client.begin_analyze_document("prebuilt-document", document=f)
+                result = poller.result()
+            
+            # Extract all text
+            full_text = ""
+            for page in result.pages:
+                for line in page.lines:
+                    full_text += line.content + "\n"
+            
+            if not full_text.strip():
+                return f"Error: No text extracted from {pdf_path.name}"
+            
+            print(f"   📝 Extracted {len(full_text)} characters from {len(result.pages)} pages")
+            
+            # Step 2: Extract lease information using AI
+            lease_info = self.extract_lease_info_ai(full_text)
+            
+            # Format the results
+            result_text = f"📋 LEASE INFORMATION EXTRACTED FROM {pdf_path.name}:\n\n"
+            
+            for field, value in lease_info.items():
+                field_display = field.replace('_', ' ').title()
+                if value is not None and str(value).strip():
+                    result_text += f"• {field_display}: {value}\n"
+                else:
+                    result_text += f"• {field_display}: Not found\n"
+            
+            # Add metadata
+            result_text += f"\n📊 EXTRACTION METADATA:\n"
+            result_text += f"• Source file: {pdf_path.name}\n"
+            result_text += f"• Pages processed: {len(result.pages)}\n"
+            result_text += f"• Text length: {len(full_text)} characters\n"
+            result_text += f"• Extraction method: AI (structured output)\n"
+            
+            return result_text
+            
+        except Exception as e:
+            return f"Error extracting lease information: {str(e)}"
+
+
 class VectorStoreIngestionTool(BaseTool):
-    """Tool for ingesting text into vector store with embeddings"""
+    """Tool for ingesting text into vector store with embeddings and AI-extracted lease information"""
     
     name: str = "vector_store_ingest"
-    description: str = "Ingests text content into vector store with embeddings. Input should be JSON with 'text', 'filename', 'metadata' fields."
+    description: str = "Ingests text content into vector store with embeddings. Input should be JSON with 'text', 'filename', 'metadata' fields. Automatically extracts lease information using AI if document type is 'Lease'."
     openai_client: Any = Field(default=None, exclude=True)
     search_client: Any = Field(default=None, exclude=True)
     embedding_model: str = Field(default="text-embedding-ada-002", exclude=True)
@@ -144,8 +298,83 @@ class VectorStoreIngestionTool(BaseTool):
             print(f"   Text preview: {text[:100]}...")
             return []
     
+    def extract_lease_info_ai(self, text: str) -> Dict[str, Any]:
+        """
+        Use AI with structured outputs to extract lease information from text.
+        Exact same function as in lease_document_processor_vector.py
+        
+        Args:
+            text: Raw text from PDF
+            
+        Returns:
+            Dictionary with extracted lease information
+        """
+        prompt = f"""
+        Extract lease information from the following document text. Identify and extract all available fields.
+        
+        For dates, use YYYY-MM-DD format if possible.
+        For building area, extract the numeric value only.
+        For area unit, use standard units like "sq ft", "sq m", "sqft", etc.
+        
+        Document text:
+        {text}
+        """
+        
+        try:
+            print('   🤖 Extracting lease information with AI during ingestion...')
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "You are a document analyst specializing in lease agreement analysis. Extract information accurately from the provided text."},
+                    {"role": "user", "content": prompt}
+                ],
+                response_format=LeaseInformation,
+                temperature=0.1,
+                max_tokens=1000
+            )
+            
+            # Parse the structured response
+            lease_info = response.choices[0].message.parsed
+            
+            # Convert Pydantic model to dictionary
+            extracted_data = lease_info.model_dump()
+            
+            # Check if AI extracted any meaningful data
+            has_data = any(value is not None and str(value).strip() for value in extracted_data.values())
+            
+            if not has_data:
+                print("   ⚠️  AI extraction completed but no lease information was found in the document")
+                print("   📄 This may indicate:")
+                print("      - Document doesn't contain lease information")
+                print("      - OCR quality is poor") 
+                print("      - Document format is not recognized")
+            else:
+                # Print what was successfully extracted
+                extracted_fields = [field for field, value in extracted_data.items() 
+                                  if value is not None and str(value).strip()]
+                print(f"   ✅ AI successfully extracted: {', '.join(extracted_fields)}")
+            
+            return extracted_data
+            
+        except Exception as e:
+            print(f"   ❌ AI extraction failed with error: {e}")
+            print("   📄 This could be due to:")
+            print("      - OpenAI API issues")
+            print("      - Invalid API key")
+            print("      - Network connectivity problems")
+            print("      - Text format issues")
+            return {
+                'description': None,
+                'location': None,
+                'lease_start_date': None,
+                'lease_end_date': None,
+                'building_area': None,
+                'area_unit': None,
+                'building_type': None
+            }
+    
     def _run(self, input_data: str) -> str:
-        """Ingest text into vector store"""
+        """Ingest text into vector store with AI lease information extraction"""
         try:
             # Parse input JSON
             data = json.loads(input_data)
@@ -155,6 +384,18 @@ class VectorStoreIngestionTool(BaseTool):
             
             if not text:
                 return "Error: No text provided for ingestion"
+            
+            # If this is a lease document, extract lease information using AI during ingestion
+            doc_type = metadata.get('doc_type', 'Lease')
+            if doc_type == 'Lease':
+                print(f"   📄 Processing lease document for ingestion: {filename}")
+                lease_info = self.extract_lease_info_ai(text)
+                
+                # Update metadata with AI-extracted information
+                for field, value in lease_info.items():
+                    if value is not None and str(value).strip():
+                        metadata[field] = value
+                        print(f"   ✅ Extracted {field}: {value}")
             
             # Generate embedding
             embedding = self._generate_embedding(text)
@@ -170,7 +411,7 @@ class VectorStoreIngestionTool(BaseTool):
                 "embedding": embedding,
                 "filename": filename,
                 "page_no": metadata.get('page_no', 1),
-                "doc_type": metadata.get('doc_type', 'Lease'),
+                "doc_type": doc_type,
                 "client_name": metadata.get('client_name', ''),
                 "language": "en",
                 "isTranslated": "no",
@@ -180,6 +421,7 @@ class VectorStoreIngestionTool(BaseTool):
                 "building_area": metadata.get('building_area', ''),
                 "area_unit": metadata.get('area_unit', ''),
                 "building_type": metadata.get('building_type', ''),
+                "description": metadata.get('description', ''),
                 "processed_at": datetime.now().isoformat()
             }
             
@@ -187,7 +429,15 @@ class VectorStoreIngestionTool(BaseTool):
             result = self.search_client.upload_documents([search_document])
             
             if result and len(result) > 0 and result[0].succeeded:
-                return f"Successfully ingested document {filename} into vector store with ID {doc_id}"
+                if doc_type == 'Lease':
+                    extracted_fields = [f for f in ['location', 'lease_start_date', 'lease_end_date', 'building_area', 'building_type'] 
+                                      if metadata.get(f)]
+                    if extracted_fields:
+                        return f"Successfully ingested lease document {filename} with AI-extracted fields: {', '.join(extracted_fields)}"
+                    else:
+                        return f"Successfully ingested lease document {filename} (no lease fields extracted)"
+                else:
+                    return f"Successfully ingested document {filename} into vector store with ID {doc_id}"
             else:
                 return f"Failed to ingest document {filename} into vector store"
                 
@@ -1062,6 +1312,11 @@ class LeaseDocumentAgent:
             print("🛠️  Initializing tools...")
             self.tools = [
                 AzureOCRTool(azure_endpoint=azure_endpoint, azure_key=azure_key),
+                LeaseInformationExtractionTool(
+                    azure_endpoint=azure_endpoint,
+                    azure_key=azure_key,
+                    openai_client=self.openai_client
+                ),
                 VectorStoreIngestionTool(
                     openai_client=self.openai_client,
                     search_client=self.search_client,

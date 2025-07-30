@@ -73,10 +73,10 @@ class UtilitiesOCRTool(BaseTool):
 
 
 class UtilitiesIngestionTool(BaseTool):
-    """Tool for ingesting utilities text into vector store with embeddings"""
+    """Tool for ingesting utilities text into vector store with embeddings and AI-extracted utilities information"""
     
     name: str = "utilities_vector_store_ingest"
-    description: str = "Ingests utilities document text content into vector store with embeddings. Input should be JSON with 'text', 'filename', 'metadata' fields including utilities-specific information."
+    description: str = "Ingests utilities document text content into vector store with embeddings. Input should be JSON with 'text', 'filename', 'metadata' fields. Automatically extracts utilities information using AI."
     openai_client: Any = Field(default=None, exclude=True)
     search_client: Any = Field(default=None, exclude=True)
     embedding_model: str = Field(default="text-embedding-ada-002", exclude=True)
@@ -102,8 +102,85 @@ class UtilitiesIngestionTool(BaseTool):
             print(f"   ❌ Failed to generate utilities embedding: {e}")
             return []
     
+    def extract_utilities_info_ai(self, text: str) -> Dict[str, Any]:
+        """
+        Use AI with structured outputs to extract utilities information from text.
+        Similar to extract_lease_info_ai but for natural gas and electricity documents.
+        
+        Args:
+            text: Raw text from PDF
+            
+        Returns:
+            Dictionary with extracted utilities information
+        """
+        prompt = f"""
+        Extract utilities information from the following document text. This is either a natural gas or electricity invoice/bill.
+        Identify and extract all available fields related to utilities consumption and billing.
+        
+        For dates, use YYYY-MM-DD format if possible.
+        For consumption amount, extract the numeric value only.
+        For unit of measure, use standard units like "therms", "kWh", "m3", "ccf", etc.
+        
+        Document text:
+        {text}
+        """
+        
+        try:
+            print('   🤖 Extracting utilities information with AI during ingestion...')
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "You are a document analyst specializing in utilities invoice analysis. Extract information accurately from natural gas and electricity bills and invoices."},
+                    {"role": "user", "content": prompt}
+                ],
+                response_format=NaturalGas_Electricity_Information,
+                temperature=0.1,
+                max_tokens=1000
+            )
+            
+            # Parse the structured response
+            utilities_info = response.choices[0].message.parsed
+            
+            # Convert Pydantic model to dictionary
+            extracted_data = utilities_info.model_dump()
+            
+            # Check if AI extracted any meaningful data
+            has_data = any(value is not None and str(value).strip() for value in extracted_data.values())
+            
+            if not has_data:
+                print("   ⚠️  AI extraction completed but no utilities information was found in the document")
+                print("   📄 This may indicate:")
+                print("      - Document doesn't contain utilities information")
+                print("      - OCR quality is poor") 
+                print("      - Document format is not recognized")
+            else:
+                # Print what was successfully extracted
+                extracted_fields = [field for field, value in extracted_data.items() 
+                                  if value is not None and str(value).strip()]
+                print(f"   ✅ AI successfully extracted utilities fields: {', '.join(extracted_fields)}")
+            
+            return extracted_data
+            
+        except Exception as e:
+            print(f"   ❌ AI utilities extraction failed with error: {e}")
+            print("   📄 This could be due to:")
+            print("      - OpenAI API issues")
+            print("      - Invalid API key")
+            print("      - Network connectivity problems")
+            print("      - Text format issues")
+            return {
+                'vendor_name': None,
+                'account_or_invoice_number': None,
+                'invoice_date': None,
+                'location': None,
+                'measurement_period_start': None,
+                'measurement_period_end': None,
+                'consumption_amount': None,
+                'unit_of_measure': None
+            }
+    
     def _run(self, input_data: str) -> str:
-        """Ingest utilities text into vector store"""
+        """Ingest utilities text into vector store with AI utilities information extraction"""
         try:
             # Parse input JSON
             data = json.loads(input_data)
@@ -113,6 +190,16 @@ class UtilitiesIngestionTool(BaseTool):
             
             if not text:
                 return "Error: No text provided for utilities ingestion"
+            
+            # Extract utilities information using AI during ingestion
+            print(f"   📄 Processing utilities document for ingestion: {filename}")
+            utilities_info = self.extract_utilities_info_ai(text)
+            
+            # Update metadata with AI-extracted information
+            for field, value in utilities_info.items():
+                if value is not None and str(value).strip():
+                    metadata[field] = value
+                    print(f"   ✅ Extracted {field}: {value}")
             
             # Generate embedding
             embedding = self._generate_embedding(text)
@@ -135,7 +222,7 @@ class UtilitiesIngestionTool(BaseTool):
                 "client_name": metadata.get('client_name', ''),
                 "language": "en",
                 "isTranslated": "no",
-                # Add natural gas/electricity information as metadata - exact same fields as full.py
+                # Add natural gas/electricity information as metadata - now AI-extracted
                 "vendor_name": metadata.get('vendor_name'),
                 "account_or_invoice_number": metadata.get('account_or_invoice_number'),
                 "invoice_date": metadata.get('invoice_date'),
@@ -151,7 +238,12 @@ class UtilitiesIngestionTool(BaseTool):
             result = self.search_client.upload_documents([search_document])
             
             if result and len(result) > 0 and result[0].succeeded:
-                return f"Successfully ingested utilities document {filename} into vector store with ID {doc_id}"
+                extracted_fields = [f for f in ['vendor_name', 'location', 'invoice_date', 'consumption_amount', 'unit_of_measure'] 
+                                  if metadata.get(f)]
+                if extracted_fields:
+                    return f"Successfully ingested utilities document {filename} with AI-extracted fields: {', '.join(extracted_fields)}"
+                else:
+                    return f"Successfully ingested utilities document {filename} (no utilities fields extracted)"
             else:
                 return f"Failed to ingest utilities document {filename} into vector store"
                 
