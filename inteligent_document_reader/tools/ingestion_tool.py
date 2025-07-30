@@ -5,7 +5,7 @@ Ingestion Tool for storing documents with embeddings in Azure AI Search
 import json
 import time
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from langchain.tools import BaseTool
 from pydantic import Field
@@ -62,7 +62,7 @@ class IngestionTool(BaseTool):
                     "area_unit": metadata.get('area_unit', ''),
                     "building_type": metadata.get('building_type', ''),
                     "description": metadata.get('description', ''),
-                    "processed_at": datetime.now().isoformat()
+                    "processed_at": datetime.now().replace(tzinfo=timezone.utc).isoformat()
                 }
             else:  # electricity or natural_gas
                 # Determine document type from filename or metadata
@@ -87,7 +87,7 @@ class IngestionTool(BaseTool):
                     "measurement_period_end": metadata.get('measurement_period_end', ''),
                     "consumption_amount": metadata.get('consumption_amount'),
                     "unit_of_measure": metadata.get('unit_of_measure', ''),
-                    "processed_at": datetime.now().isoformat()
+                    "processed_at": datetime.now().replace(tzinfo=timezone.utc).isoformat()
                 }
             
             # Upload to search index

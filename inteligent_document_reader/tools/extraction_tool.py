@@ -32,7 +32,7 @@ class ExtractionTool(BaseTool):
             user_prompt = get_user_prompt("lease", text)
             model = get_model()
             
-            response = self.openai_client.chat.completions.create(
+            response = self.openai_client.chat.completions.parse(
                 model=model,
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -81,7 +81,7 @@ class ExtractionTool(BaseTool):
             user_prompt = get_user_prompt(doc_type, text)
             model = get_model()
             
-            response = self.openai_client.chat.completions.create(
+            response = self.openai_client.chat.completions.parse(
                 model=model,
                 messages=[
                     {"role": "system", "content": system_prompt},
