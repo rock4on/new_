@@ -24,18 +24,8 @@ class DocumentAgent:
     4. Ingest into index
     """
     
-    def __init__(self, azure_form_recognizer_endpoint: str, azure_form_recognizer_key: str,
-                 openai_api_key: str, azure_search_endpoint: str, azure_search_key: str,
-                 openai_base_url: str = None):
+    def __init__(self):
         self.config = Config()
-        
-        # Store credentials
-        self.azure_form_recognizer_endpoint = azure_form_recognizer_endpoint
-        self.azure_form_recognizer_key = azure_form_recognizer_key
-        self.openai_api_key = openai_api_key
-        self.openai_base_url = openai_base_url
-        self.azure_search_endpoint = azure_search_endpoint
-        self.azure_search_key = azure_search_key
         
         print("🤖 Initializing Inteligent Document Reader...")
         
@@ -54,9 +44,9 @@ class DocumentAgent:
         """Initialize OpenAI client"""
         try:
             print("🔍 Initializing OpenAI client...")
-            openai_kwargs = {"api_key": self.openai_api_key}
-            if self.openai_base_url:
-                openai_kwargs["base_url"] = self.openai_base_url
+            openai_kwargs = {"api_key": self.config.OPENAI_API_KEY}
+            if self.config.OPENAI_BASE_URL:
+                openai_kwargs["base_url"] = self.config.OPENAI_BASE_URL
             
             self.openai_client = openai.OpenAI(**openai_kwargs)
             
@@ -75,16 +65,16 @@ class DocumentAgent:
             
             # Main documents search client
             self.search_client = SearchClient(
-                endpoint=self.azure_search_endpoint,
+                endpoint=self.config.AZURE_SEARCH_ENDPOINT,
                 index_name=self.config.AZURE_SEARCH_INDEX_NAME,
-                credential=AzureKeyCredential(self.azure_search_key)
+                credential=AzureKeyCredential(self.config.AZURE_SEARCH_KEY)
             )
             
             # Utilities search client (separate index)
             self.utilities_search_client = SearchClient(
-                endpoint=self.azure_search_endpoint,
+                endpoint=self.config.AZURE_SEARCH_ENDPOINT,
                 index_name=self.config.AZURE_SEARCH_UTILITIES_INDEX_NAME,
-                credential=AzureKeyCredential(self.azure_search_key)
+                credential=AzureKeyCredential(self.config.AZURE_SEARCH_KEY)
             )
             
             print("✅ Azure Search clients initialized")
@@ -99,8 +89,8 @@ class DocumentAgent:
             print("🛠️  Initializing processing tools...")
             
             self.ocr_tool = OCRTool(
-                azure_endpoint=self.azure_form_recognizer_endpoint,
-                azure_key=self.azure_form_recognizer_key
+                azure_endpoint=self.config.AZURE_FORM_RECOGNIZER_ENDPOINT,
+                azure_key=self.config.AZURE_FORM_RECOGNIZER_KEY
             )
             
             self.extraction_tool = ExtractionTool(

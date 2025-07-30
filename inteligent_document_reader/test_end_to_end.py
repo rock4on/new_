@@ -28,15 +28,8 @@ def test_lease_ingestion():
     print("=" * 50)
     
     try:
-        # Initialize the agent with credentials from environment variables
-        agent = DocumentAgent(
-            azure_form_recognizer_endpoint=os.getenv('AZURE_FORM_RECOGNIZER_ENDPOINT'),
-            azure_form_recognizer_key=os.getenv('AZURE_FORM_RECOGNIZER_KEY'),
-            openai_api_key=os.getenv('OPENAI_API_KEY'),
-            azure_search_endpoint=os.getenv('AZURE_SEARCH_ENDPOINT'),
-            azure_search_key=os.getenv('AZURE_SEARCH_KEY'),
-            openai_base_url=os.getenv('OPENAI_BASE_URL')  # Optional
-        )
+        # Initialize the agent (credentials are now in Config class)
+        agent = DocumentAgent()
         
         print(f"✅ Agent initialized successfully")
         print(f"📁 Leases folder: {Config.LEASES_FOLDER}")
@@ -151,9 +144,9 @@ def test_excel_matching():
         from azure.core.credentials import AzureKeyCredential
         
         search_client = SearchClient(
-            endpoint=os.getenv('AZURE_SEARCH_ENDPOINT'),
+            endpoint=Config.AZURE_SEARCH_ENDPOINT,
             index_name=Config.AZURE_SEARCH_INDEX_NAME,
-            credential=AzureKeyCredential(os.getenv('AZURE_SEARCH_KEY'))
+            credential=AzureKeyCredential(Config.AZURE_SEARCH_KEY)
         )
         
         # Initialize matching tool
@@ -206,24 +199,24 @@ def main():
     print("🚀 INTELIGENT DOCUMENT READER - END-TO-END TESTS")
     print("=" * 60)
     
-    # Check required environment variables
-    required_vars = [
-        'AZURE_FORM_RECOGNIZER_ENDPOINT',
-        'AZURE_FORM_RECOGNIZER_KEY',
-        'OPENAI_API_KEY',
-        'AZURE_SEARCH_ENDPOINT',
-        'AZURE_SEARCH_KEY'
+    # Check if config has real values (not placeholders)
+    config_vars = [
+        ('AZURE_FORM_RECOGNIZER_ENDPOINT', Config.AZURE_FORM_RECOGNIZER_ENDPOINT),
+        ('AZURE_FORM_RECOGNIZER_KEY', Config.AZURE_FORM_RECOGNIZER_KEY),
+        ('OPENAI_API_KEY', Config.OPENAI_API_KEY),
+        ('AZURE_SEARCH_ENDPOINT', Config.AZURE_SEARCH_ENDPOINT),
+        ('AZURE_SEARCH_KEY', Config.AZURE_SEARCH_KEY)
     ]
     
-    missing_vars = [var for var in required_vars if not os.getenv(var)]
+    missing_vars = [var_name for var_name, var_value in config_vars if var_value.startswith('your_')]
     if missing_vars:
-        print(f"❌ Missing required environment variables:")
+        print(f"❌ Please update Config class with real credentials:")
         for var in missing_vars:
             print(f"   • {var}")
-        print(f"\n💡 Set these environment variables before running tests")
+        print(f"\n💡 Edit inteligent_document_reader/config.py with your actual credentials")
         return
     
-    print(f"✅ All required environment variables are set")
+    print(f"✅ All required credentials are configured")
     
     # Run tests
     test_results = []

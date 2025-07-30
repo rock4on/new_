@@ -2,6 +2,8 @@
 Prompt templates for document processing - easily modifiable
 """
 
+from ..config import Config
+
 # System prompts for different document types
 SYSTEM_PROMPTS = {
     "lease_extraction": "You are a document analyst specializing in lease agreement analysis. Extract information accurately from the provided text.",
@@ -43,8 +45,8 @@ Document text:
 {text}"""
 }
 
-# OpenAI model - can be modified
-DEFAULT_MODEL = "gpt-4o-mini"
+# OpenAI model - uses config
+DEFAULT_MODEL = Config.OPENAI_MODEL
 
 def get_system_prompt(doc_type: str) -> str:
     """Get system prompt for document type"""

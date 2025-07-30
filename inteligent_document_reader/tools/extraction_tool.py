@@ -8,6 +8,7 @@ from pydantic import Field
 
 from ..models import DOCUMENT_MODELS, LeaseInformation, NaturalGas_Electricity_Information
 from ..prompts import get_system_prompt, get_user_prompt, get_model
+from ..config import Config
 
 
 class ExtractionTool(BaseTool):
@@ -38,8 +39,8 @@ class ExtractionTool(BaseTool):
                     {"role": "user", "content": user_prompt}
                 ],
                 response_format=LeaseInformation,
-                temperature=0.1,  # hardcoded
-                max_tokens=1000   # hardcoded
+                temperature=Config.OPENAI_TEMPERATURE,
+                max_tokens=Config.OPENAI_MAX_TOKENS
             )
             
             # Parse the structured response
@@ -87,8 +88,8 @@ class ExtractionTool(BaseTool):
                     {"role": "user", "content": user_prompt}
                 ],
                 response_format=NaturalGas_Electricity_Information,
-                temperature=0.1,  # hardcoded
-                max_tokens=1000   # hardcoded
+                temperature=Config.OPENAI_TEMPERATURE,
+                max_tokens=Config.OPENAI_MAX_TOKENS
             )
             
             # Parse the structured response
