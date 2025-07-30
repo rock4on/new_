@@ -163,7 +163,29 @@ class MatchingToolLease(BaseTool):
             
             # Save the output Excel file
             try:
-                df_output.to_excel(output_excel_path, header=False, index=False, engine='openpyxl')
+                # Use xlsxwriter for better Excel compatibility, or keep_vba for .xlsm files
+                if output_excel_path.endswith('.xlsm'):
+                    # For .xlsm files, we need to preserve the format
+                    from openpyxl import load_workbook
+                    
+                    # Load the original workbook to preserve formatting and macros
+                    wb = load_workbook(input_excel_path, keep_vba=True)
+                    ws = wb.active
+                    
+                    # Update the worksheet with our data
+                    for row_idx in range(len(df_output)):
+                        for col_idx in range(len(df_output.columns)):
+                            # Excel is 1-indexed, pandas is 0-indexed
+                            cell_value = df_output.iloc[row_idx, col_idx]
+                            if pd.notna(cell_value):
+                                ws.cell(row=row_idx + 1, column=col_idx + 1, value=cell_value)
+                    
+                    # Save with VBA preserved
+                    wb.save(output_excel_path)
+                else:
+                    # For regular .xlsx files
+                    df_output.to_excel(output_excel_path, header=False, index=False, engine='openpyxl')
+                
                 print(f"\n💾 Saved output to: {output_excel_path}")
             except Exception as e:
                 return f"❌ Error saving output file: {e}"
